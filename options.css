@@ -1,0 +1,113 @@
+:root {
+  --bg: #0f0f12;
+  --card: rgba(255,255,255,0.06);
+  --line: rgba(255,255,255,0.10);
+  --text: rgba(255,255,255,0.92);
+  --muted: rgba(255,255,255,0.70);
+}
+
+html, body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;
+  margin: 0;
+  padding: 0;
+}
+
+header {
+  padding: 18px 16px 0 16px;
+}
+
+header h1 {
+  margin: 0 0 6px 0;
+  font-size: 20px;
+}
+
+header p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
+
+main {
+  padding: 14px 16px 26px 16px;
+  max-width: 960px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 16px;
+  padding: 14px;
+  margin-top: 12px;
+}
+
+.card h2 {
+  margin: 0 0 10px 0;
+  font-size: 14px;
+  opacity: 0.95;
+}
+
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 14px;
+  align-items: center;
+}
+
+.grid2, .grid3 {
+  display: grid;
+  gap: 12px;
+  margin-top: 10px;
+}
+
+.grid2 { grid-template-columns: 1fr 1fr; }
+.grid3 { grid-template-columns: repeat(3, 1fr); }
+
+label { font-size: 13px; color: var(--muted); display: block; margin-bottom: 6px; }
+input[type="number"] {
+  width: 100%;
+  padding: 10px 10px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  background: rgba(0,0,0,0.25);
+  color: var(--text);
+  outline: none;
+}
+
+input[type="checkbox"] { transform: translateY(1px); }
+
+.hint {
+  margin: 10px 0 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.actions {
+  display: flex;
+  gap: 10px;
+  margin-top: 16px;
+  align-items: center;
+}
+
+button {
+  appearance: none;
+  border: 0;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-weight: 800;
+  background: rgba(255,255,255,0.12);
+  color: var(--text);
+  cursor: pointer;
+  min-width: 120px;
+}
+
+button:hover { background: rgba(255,255,255,0.18); }
+button.secondary { background: rgba(255,255,255,0.08); }
+button.secondary:hover { background: rgba(255,255,255,0.14); }
+
+#status { color: var(--muted); font-size: 12px; }
+@media (max-width: 860px) {
+  .grid3 { grid-template-columns: 1fr; }
+  .grid2 { grid-template-columns: 1fr; }
+}

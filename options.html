@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>follone 設定</title>
+  <link rel="stylesheet" href="options.css" />
+</head>
+<body>
+  <header>
+    <h1>follone 設定</h1>
+    <p>ローカルAI（Prompt API / Gemini Nano）での判定と介入ルールを調整します。</p>
+  </header>
+
+  <main>
+    <section class="card">
+      <h2>基本</h2>
+      <div class="row">
+        <label><input type="checkbox" id="enabled"> 有効化</label>
+        <label><input type="checkbox" id="autoReportSuggest"> 無操作時にレポート提案</label>
+      </div>
+      <div class="grid2">
+        <div>
+          <label>バッチ数（可視投稿をまとめて判定）</label>
+          <input id="batchSize" type="number" min="1" max="8" step="1" />
+        </div>
+        <div>
+          <label>アイドル判定待ち（ms）</label>
+          <input id="idleMs" type="number" min="100" max="5000" step="50" />
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>危険投稿</h2>
+      <div class="grid2">
+        <div>
+          <label>ソフト閾値（強調表示）</label>
+          <input id="riskSoft" type="number" min="0" max="100" step="1" />
+        </div>
+        <div>
+          <label>ハード閾値（スクロール停止＋介入）</label>
+          <input id="riskHard" type="number" min="0" max="100" step="1" />
+        </div>
+      </div>
+      <p class="hint">ソフトは「枠で警告」、ハードは「画面を止めて説明＋選択肢」です。</p>
+    </section>
+
+    <section class="card">
+      <h2>フィルターバブル</h2>
+      <div class="row">
+        <label><input type="checkbox" id="bubbleUseLLM"> 提案ワードをAIで生成（推奨）</label>
+      </div>
+      <div class="grid3">
+        <div>
+          <label>ウィンドウ数（直近投稿数）</label>
+          <input id="topicWindow" type="number" min="10" max="200" step="1" />
+        </div>
+        <div>
+          <label>偏り率（dominance）</label>
+          <input id="bubbleDominance" type="number" min="0.30" max="0.95" step="0.01" />
+        </div>
+        <div>
+          <label>集中度（entropy）</label>
+          <input id="bubbleEntropy" type="number" min="0.10" max="0.99" step="0.01" />
+        </div>
+        <div>
+          <label>最小サンプル数</label>
+          <input id="bubbleMinSamples" type="number" min="8" max="100" step="1" />
+        </div>
+        <div>
+          <label>クールダウン（秒）</label>
+          <input id="bubbleCooldownSec" type="number" min="30" max="7200" step="10" />
+        </div>
+      </div>
+      <p class="hint">dominanceが高い、またはentropyが低いほど「同じカテゴリばかり」と判断します。</p>
+    </section>
+
+    <section class="card">
+      <h2>セッション / レポート</h2>
+      <div class="grid3">
+        <div>
+          <label>レポート最小秒数</label>
+          <input id="sessionMinSec" type="number" min="10" max="600" step="5" />
+        </div>
+        <div>
+          <label>無操作秒数（提案まで）</label>
+          <input id="inactiveSec" type="number" min="30" max="1800" step="10" />
+        </div>
+        <div>
+          <label>提案クールダウン（秒）</label>
+          <input id="reportCooldownSec" type="number" min="30" max="7200" step="10" />
+        </div>
+      </div>
+    </section>
+
+    <section class="card">
+      <h2>キャラクター</h2>
+      <div class="row">
+        <label><input type="checkbox" id="personaLazyKind"> 気怠いけど優しい</label>
+        <label><input type="checkbox" id="explainMode"> 介入は説明重視</label>
+      </div>
+    </section>
+
+    <div class="actions">
+      <button id="save">保存</button>
+      <button id="reset" class="secondary">初期値に戻す</button>
+      <span id="status"></span>
+    </div>
+  </main>
+
+  <script src="options.js"></script>
+</body>
+</html>
