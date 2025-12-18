@@ -1,5 +1,6 @@
 const KEYMAP = {
   enabled: "follone_enabled",
+  aiMode: "follone_aiMode",
   riskSoft: "follone_riskSoftThreshold",
   riskHard: "follone_riskHardThreshold",
   batchSize: "follone_batchSize",
@@ -23,6 +24,8 @@ async function load() {
   const cur = await chrome.storage.local.get(keys);
 
   $("enabled").checked = cur[KEYMAP.enabled] ?? true;
+  $("aiMode").value = cur[KEYMAP.aiMode] ?? "auto";
+
   $("riskSoft").value = cur[KEYMAP.riskSoft] ?? 60;
   $("riskHard").value = cur[KEYMAP.riskHard] ?? 75;
   $("batchSize").value = cur[KEYMAP.batchSize] ?? 3;
@@ -51,6 +54,8 @@ async function load() {
 async function save() {
   const out = {};
   out[KEYMAP.enabled] = $("enabled").checked;
+  out[KEYMAP.aiMode] = $("aiMode").value;
+
   out[KEYMAP.riskSoft] = Number($("riskSoft").value || 60);
   out[KEYMAP.riskHard] = Number($("riskHard").value || 75);
   out[KEYMAP.batchSize] = Number($("batchSize").value || 3);

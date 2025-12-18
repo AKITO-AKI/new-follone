@@ -1,6 +1,7 @@
 // follone service worker (MV3)
 const DEFAULTS = {
   follone_enabled: true,
+  follone_aiMode: "auto", // auto | mock | off
   follone_riskSoftThreshold: 60,
   follone_riskHardThreshold: 75,
   follone_batchSize: 3,
@@ -9,7 +10,7 @@ const DEFAULTS = {
   // Filter-bubble
   follone_topicWindow: 30,
   follone_bubbleDominance: 0.62,
-  follone_bubbleEntropy: 0.55, // normalized entropy (lower => more concentrated)
+  follone_bubbleEntropy: 0.55,
   follone_bubbleCooldownMs: 10 * 60 * 1000,
   follone_bubbleMinSamples: 16,
   follone_bubbleUseLLM: true,
@@ -49,7 +50,6 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
 
     if (msg.type === "FOLLONE_OPEN_OPTIONS") {
-      // Important: openOptionsPage must be called from extension context (SW).
       try {
         await chrome.runtime.openOptionsPage();
         sendResponse({ ok: true });

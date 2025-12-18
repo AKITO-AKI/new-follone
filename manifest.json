@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "follone for X",
-  "version": "0.4.5",
-  "description": "XのタイムラインをローカルAI（Gemini Nano / Prompt API）で補助する。危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート。",
+  "version": "0.4.6",
+  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。Prompt APIが無い環境でもMockで動作。",
   "permissions": [
     "storage"
   ],

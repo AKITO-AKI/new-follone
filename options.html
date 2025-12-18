@@ -17,7 +17,16 @@
         <input type="checkbox" id="enabled">
       </label>
 
-      <div class="grid2">
+      <label>
+        <span>AIモード</span>
+        <select id="aiMode">
+          <option value="auto">auto（Prompt APIがあれば使用 / なければMock）</option>
+          <option value="mock">mock（簡易判定のみで常に動作）</option>
+          <option value="off">off（AI判定なし）</option>
+        </select>
+      </label>
+
+      <div class="grid2" style="margin-top:10px;">
         <label>
           <span>危険（ソフト）閾値</span>
           <input type="number" id="riskSoft" min="0" max="100" step="1">
