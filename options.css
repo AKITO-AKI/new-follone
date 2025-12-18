@@ -18,3 +18,17 @@ select{width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px s
 
 .muted{font-size:12px;opacity:0.75;line-height:1.5}
 .pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:10px;margin:6px 0 0 0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;}
+
+.btn{
+  padding:10px 12px;
+  border-radius:10px;
+  border:1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.08);
+  color:#fff;
+  cursor:pointer;
+  font-weight:800;
+}
+.btn.danger{
+  background: rgba(255, 80, 80, 0.18);
+  border-color: rgba(255, 80, 80, 0.35);
+}

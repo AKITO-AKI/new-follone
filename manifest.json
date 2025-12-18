@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "follone for X",
-  "version": "0.4.10",
-  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。Offscreen Prompt API + 先読み分析 + ローディング演出 + 優先度キュー（修正版）。",
+  "version": "0.4.14",
+  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。Offscreen Prompt API + 先読み分析 + 優先度キュー + 永続キャッシュv2(本文ハッシュ) + 復旧強化。",
   "permissions": [
     "offscreen",
     "storage"

@@ -50,7 +50,13 @@
     inactiveSuggestSeconds: 180,
     inactiveCooldownMs: 10 * 60 * 1000,
 
-    topics: FALLBACK_TOPICS.slice()
+    topics: FALLBACK_TOPICS.slice(),
+
+    // v0.4.11 performance knobs
+    cacheMax: 900,
+    cachePersistMs: 700,
+    skipMediaOnly: true,
+    skipEmojiOnly: true
   };
 
   async function loadSettings() {
@@ -72,7 +78,10 @@
       "follone_inactiveCooldownMs",
       "follone_topics",
       "follone_debug",
-      "follone_logLevel"
+      "follone_logLevel",
+      "follone_cacheMax",
+      "follone_skipMediaOnly",
+      "follone_skipEmojiOnly"
     ]);
 
     if (cur.follone_enabled !== undefined) settings.enabled = !!cur.follone_enabled;
@@ -96,6 +105,9 @@
 
     if (cur.follone_debug !== undefined) settings.debug = !!cur.follone_debug;
     if (cur.follone_logLevel !== undefined) settings.logLevel = String(cur.follone_logLevel || "info");
+    if (cur.follone_cacheMax !== undefined) settings.cacheMax = Math.max(100, Number(cur.follone_cacheMax || settings.cacheMax));
+    if (cur.follone_skipMediaOnly !== undefined) settings.skipMediaOnly = !!cur.follone_skipMediaOnly;
+    if (cur.follone_skipEmojiOnly !== undefined) settings.skipEmojiOnly = !!cur.follone_skipEmojiOnly;
 
     if (Array.isArray(cur.follone_topics) && cur.follone_topics.length) {
       settings.topics = cur.follone_topics.map(s => String(s).trim()).filter(Boolean).slice(0, 30);
@@ -129,6 +141,19 @@
     discoverScheduled: false,
     analyzeScheduled: false,
     analyzingVisible: new Set(),
+
+    // v0.4.12: queue upgrade/dedupe helpers
+    pendingPriority: new Map(),
+    enqSeq: 0,
+    seqById: new Map(),
+    canceledIds: new Set(),
+
+    // v0.4.12: hash caches
+    hashById: new Map(),
+    hashCache: new Map(),
+
+    // persistent cache shadow
+    persistentCache: null,
     topicHistory: [],
     lastBubbleTs: 0,
 
@@ -174,6 +199,256 @@
       log("error","[BACKEND]","create() failed -> mock", String(_e));
       pushRing(head + " (unserializable)");
     }
+  }
+
+
+  // -----------------------------
+  // Persistent result cache (v0.4.11)
+  // -----------------------------
+  const RESULT_CACHE_KEY_V2 = "follone_resultCache_v2";
+  const RESULT_CACHE_KEY_V1 = "follone_resultCache_v1";
+
+  function fnv1a32(str) {
+    let h = 0x811c9dc5;
+    const s = String(str || "");
+    for (let i = 0; i < s.length; i++) {
+      h ^= s.charCodeAt(i);
+      h += (h << 1) + (h << 4) + (h << 7) + (h << 8) + (h << 24);
+    }
+    return (h >>> 0).toString(16);
+  }
+
+  function normalizeForHash(text) {
+    let t = String(text || "");
+    if (!t) return "";
+    t = t.replace(/\s+/g, " ").trim();
+    t = t.replace(/[\u200B-\u200D\uFEFF]/g, "");
+    t = t.toLowerCase();
+    t = t.replace(/https?:\/\/\S+/g, "<url>");
+    t = t.replace(/([!！?？])\1{1,}/g, "$1$1");
+    if (t.length > 600) t = t.slice(0, 450) + " … " + t.slice(-120);
+    return t;
+  }
+
+  function ensurePersistentCache() {
+    // Validate existing cache object
+    const pc0 = state.persistentCache;
+    if (pc0 && pc0.version === 2) {
+      if (!pc0.ids) pc0.ids = { order: [], map: Object.create(null) };
+      if (!pc0.hashes) pc0.hashes = { order: [], map: Object.create(null) };
+      if (!pc0.id2h) pc0.id2h = Object.create(null);
+
+      if (!Array.isArray(pc0.ids.order)) pc0.ids.order = [];
+      if (!pc0.ids.map || typeof pc0.ids.map !== "object") pc0.ids.map = Object.create(null);
+
+      if (!Array.isArray(pc0.hashes.order)) pc0.hashes.order = [];
+      if (!pc0.hashes.map || typeof pc0.hashes.map !== "object") pc0.hashes.map = Object.create(null);
+
+      return pc0;
+    }
+
+    state.persistentCache = {
+      version: 2,
+      ids: { order: [], map: Object.create(null) },
+      hashes: { order: [], map: Object.create(null) },
+      id2h: Object.create(null)
+    };
+    return state.persistentCache;
+  }
+
+  function touchCacheBucket(bucket, key, value, maxN) {
+    if (!bucket || typeof bucket !== "object") return;
+    if (!key || !value) return;
+
+    if (!Array.isArray(bucket.order)) bucket.order = [];
+    if (!bucket.map || typeof bucket.map !== "object") bucket.map = {};
+
+    const order = bucket.order;
+    const map = bucket.map;
+
+    const idx = order.indexOf(key);
+    if (idx >= 0) order.splice(idx, 1);
+    order.push(key);
+    map[key] = value;
+
+    const cap = Number.isFinite(Number(maxN)) ? Math.max(1, Math.trunc(maxN)) : 200;
+    while (order.length > cap) {
+      const drop = order.shift();
+      if (drop) delete map[drop];
+    }
+  }
+
+  function setIdHash(id, h) {
+    if (!id || !h) return;
+    const pc = ensurePersistentCache();
+    pc.id2h[id] = h;
+    state.hashById.set(id, h);
+  }
+
+  function getHashForId(id) {
+    if (!id) return "";
+    const h = state.hashById.get(id);
+    if (h) return h;
+    const pc = ensurePersistentCache();
+    const hh = pc && pc.id2h ? pc.id2h[id] : "";
+    if (hh) state.hashById.set(id, hh);
+    return hh || "";
+  }
+
+  let cacheLoaded = false;
+
+
+  function ensureRuntimeMaps() {
+    // Defensive: avoid crashes if any runtime containers were lost due to partial reload / navigation churn.
+    if (!state.riskCache || typeof state.riskCache.get !== "function") state.riskCache = new Map();
+    if (!state.elemById || typeof state.elemById.get !== "function") state.elemById = new Map();
+
+    if (!state.sentForAnalysis || typeof state.sentForAnalysis.has !== "function") state.sentForAnalysis = new Set();
+    if (!state.intervenedIds || typeof state.intervenedIds.has !== "function") state.intervenedIds = new Set();
+    if (!state.analyzingVisible || typeof state.analyzingVisible.has !== "function") state.analyzingVisible = new Set();
+
+    if (!Array.isArray(state.analyzeHigh)) state.analyzeHigh = [];
+    if (!Array.isArray(state.analyzeLow)) state.analyzeLow = [];
+    if (!Array.isArray(state.discoverQueue)) state.discoverQueue = [];
+
+    if (typeof state.discoverScheduled !== "boolean") state.discoverScheduled = false;
+    if (typeof state.analyzeScheduled !== "boolean") state.analyzeScheduled = false;
+
+    if (!state.pendingPriority || typeof state.pendingPriority.get !== "function") state.pendingPriority = new Map();
+    if (!state.seqById || typeof state.seqById.get !== "function") state.seqById = new Map();
+    if (!state.hashById || typeof state.hashById.get !== "function") state.hashById = new Map();
+    if (!state.hashCache || typeof state.hashCache.get !== "function") state.hashCache = new Map();
+    if (!state.topicCounts || typeof state.topicCounts.get !== "function") state.topicCounts = new Map();
+  }
+
+  let cacheDirty = false;
+  let cachePersistTimer = 0;
+
+  async function loadResultCache() {
+    if (cacheLoaded) return;
+    cacheLoaded = true;
+    try {
+      const obj = await chrome.storage.local.get([RESULT_CACHE_KEY_V2, RESULT_CACHE_KEY_V1]);
+      let saved = obj[RESULT_CACHE_KEY_V2];
+
+      if (!saved || typeof saved !== "object") {
+        const v1 = obj[RESULT_CACHE_KEY_V1];
+        if (v1 && typeof v1 === "object") {
+          log("info", "[CACHE]", "migrating v1 -> v2");
+          saved = {
+            version: 2,
+            ids: { order: Array.isArray(v1.order) ? v1.order.slice() : [], map: v1.map || {} },
+            hashes: { order: [], map: Object.create(null) },
+            id2h: Object.create(null)
+          };
+        }
+      }
+
+      if (!saved || typeof saved !== "object") {
+        log("info", "[CACHE]", "no saved cache");
+        return;
+      }
+
+      // Normalize
+      if (saved.version !== 2) {
+        saved = ensurePersistentCache();
+      } else {
+        if (!saved.ids) saved.ids = { order: [], map: Object.create(null) };
+        if (!saved.hashes) saved.hashes = { order: [], map: Object.create(null) };
+        if (!saved.id2h) saved.id2h = Object.create(null);
+      }
+
+      state.persistentCache = saved;
+
+      // ensure all expected buckets exist
+      ensurePersistentCache();
+
+      const idOrder = Array.isArray(saved.ids.order) ? saved.ids.order : [];
+      const idMap = saved.ids.map || {};
+      const hashOrder = Array.isArray(saved.hashes.order) ? saved.hashes.order : [];
+      const hashMap = saved.hashes.map || {};
+
+      let restored = 0;
+      for (const id of idOrder.slice(-Number(settings.cacheMax || 800))) {
+        const v = idMap[id];
+        if (!v) continue;
+        state.riskCache.set(id, v);
+        restored += 1;
+      }
+
+      let restoredH = 0;
+      for (const h of hashOrder.slice(-Number(settings.cacheMaxHash || 500))) {
+        const v = hashMap[h];
+        if (!v) continue;
+        state.hashCache.set(h, v);
+        restoredH += 1;
+      }
+
+      // Restore id->hash mapping into runtime map
+      const id2h = saved.id2h || {};
+      for (const [id, h] of Object.entries(id2h)) {
+        if (h) state.hashById.set(id, h);
+      }
+
+      log("info", "[CACHE]", "restored", { ids: restored, hashes: restoredH });
+    } catch (e) {
+      log("warn", "[CACHE]", "load failed", String(e));
+    }
+  }
+
+  function touchPersistentCache(id, value, textHash) {
+    if (!id || !value) return;
+    const pc = ensurePersistentCache();
+
+    touchCacheBucket(pc.ids, id, value, Number(settings.cacheMax || 800));
+
+    const h = String(textHash || "");
+    if (h) {
+      touchCacheBucket(pc.hashes, h, value, Number(settings.cacheMaxHash || 500));
+      pc.id2h[id] = h;
+      state.hashCache.set(h, value);
+      state.hashById.set(id, h);
+    }
+
+    cacheDirty = true;
+    schedulePersistCache();
+  }
+
+  function schedulePersistCache() {
+    if (!cacheDirty) return;
+    if (cachePersistTimer) return;
+    cachePersistTimer = setTimeout(async () => {
+      cachePersistTimer = 0;
+      if (!cacheDirty) return;
+      cacheDirty = false;
+      try {
+        const pc = ensurePersistentCache();
+        if (!pc) return;
+        await chrome.storage.local.set({ [RESULT_CACHE_KEY_V2]: pc });
+        log("debug", "[CACHE]", "persisted", { ids: (pc?.ids?.order?.length||0), hashes: (pc?.hashes?.order?.length||0) });
+      } catch (e) {
+        log("warn", "[CACHE]", "persist failed", String(e));
+      }
+    }, Math.max(250, settings.cachePersistMs || 700));
+  }
+
+  function shrinkResultForCache(r) {
+    if (!r) return null;
+    const cut = (s, n) => {
+      const t = String(s || "");
+      return t.length > n ? t.slice(0, n) + "…" : t;
+    };
+    return {
+      id: String(r.id || ""),
+      riskScore: Number(r.riskScore || 0),
+      riskCategory: String(r.riskCategory || "なし"),
+      topicCategory: String(r.topicCategory || "その他"),
+      summary: cut(r.summary, 120),
+      explanation: cut(r.explanation, 220),
+      suggestedSearches: Array.isArray(r.suggestedSearches) ? r.suggestedSearches.slice(0, 3) : [],
+      _source: r._source || "ai",
+      _ts: Date.now()
+    };
   }
 
 // -----------------------------
@@ -579,6 +854,45 @@
 
     return { id, text, meta, elem: article };
   }
+
+  // -----------------------------
+  // Low-risk skip heuristics (reverse filter) v0.4.11
+  // - Do NOT try to detect "bad words". We only skip posts that are very unlikely to be risky:
+  //   (1) no visible text (media-only), (2) emoji-only / symbol-only.
+  // - We are conservative to avoid missing short but harmful text.
+  function analyzeSignals(post) {
+    const raw = String(post?.text || "");
+    const s = raw.replace(/\s+/g, " ").trim();
+    const alphaNum = (s.match(/[\p{L}\p{N}]/gu) || []).length; // letters/numbers
+    const hasUrl = /https?:\/\/|t\.co\/|x\.com\//i.test(s);
+    const hasMention = /@[A-Za-z0-9_]{1,20}/.test(s);
+    const hasHash = /#[^\s#]{1,40}/.test(s);
+    const hasVisibleText = !!post?._hasVisibleText;
+    const isMediaOnly = !hasVisibleText && (raw.startsWith("【画像】") || raw.startsWith("【本文なし"));
+    const isEmojiOnly = alphaNum === 0 && !hasUrl && !hasMention && !hasHash && s.length > 0;
+    return { s, alphaNum, hasUrl, hasMention, hasHash, hasVisibleText, isMediaOnly, isEmojiOnly };
+  }
+
+  function shouldSkipAnalysis(post) {
+    const sig = analyzeSignals(post);
+    if (settings.skipMediaOnly && sig.isMediaOnly) return { skip: true, reason: "media-only" };
+    if (settings.skipEmojiOnly && sig.isEmojiOnly) return { skip: true, reason: "emoji-only" };
+    return { skip: false, reason: "" };
+  }
+
+  function makeSkipResult(id, reason) {
+    return {
+      id: String(id || ""),
+      riskScore: 0,
+      riskCategory: "なし",
+      topicCategory: "その他",
+      summary: "",
+      explanation: `低リスク判定（${reason}）のため解析を省略しました。`,
+      suggestedSearches: [],
+      _source: "skip"
+    };
+  }
+
 
   // -----------------------------
   // Classification: Prompt API
@@ -989,15 +1303,71 @@
   // Processing loop
   // -----------------------------
   function enqueueForAnalysis(post, priority) {
+    ensureRuntimeMaps();
     if (!post || !post.id) return;
+
+    // If we already have a result, no need to analyze.
     if (state.riskCache.has(post.id)) return;
-    if (state.sentForAnalysis.has(post.id)) return;
+
+    // Reverse filter (low-risk skip)
+    const norm = normalizeForHash(post.text || "");
+    const textHash = norm ? fnv1a32(norm) : "";
+    if (textHash) setIdHash(post.id, textHash);
+
+    // Hash cache fast path (id-independent reuse)
+    if (textHash && !state.riskCache.has(post.id)) {
+      const cached = state.hashCache.get(textHash);
+      if (cached) {
+        const res = { ...cached, id: post.id };
+        state.riskCache.set(post.id, res);
+        state.elemById.set(post.id, post.elem);
+        try { post.elem.dataset.folloneId = post.id; } catch (_) {}
+        touchPersistentCache(post.id, shrinkResultForCache(res), textHash);
+        log("debug", "[CACHE]", "hit(hash)", { id: post.id, h: textHash });
+        return;
+      }
+    }
+
+    const sk = shouldSkipAnalysis(post);
+    if (sk.skip) {
+      const res = makeSkipResult(post.id, sk.reason);
+      state.riskCache.set(post.id, res);
+      touchPersistentCache(post.id, shrinkResultForCache(res), textHash);
+      state.elemById.set(post.id, post.elem);
+      try { post.elem.dataset.folloneId = post.id; } catch (_) {}
+      log("debug", "[SKIP]", sk.reason, { id: post.id });
+      return;
+    }
+
+    // Priority upgrade path: if already queued as low, allow bump to high.
+    const pr = (priority === "high") ? "high" : "low";
+    if (state.sentForAnalysis.has(post.id)) {
+      const cur = state.pendingPriority.get(post.id) || "low";
+      if (pr === "high" && cur !== "high") {
+        state.pendingPriority.set(post.id, "high");
+
+        // seq-based dedupe: newer copy wins
+        const seq = ++state.enqSeq;
+        state.seqById.set(post.id, seq);
+        const bumped = { ...post, seq };
+
+        state.analyzeHigh.unshift(bumped); // front-load
+        log("debug", "[QUEUE]", "upgrade->high", { id: post.id, seq });
+        scheduleAnalyze(0);
+      }
+      return;
+    }
 
     state.sentForAnalysis.add(post.id);
+
+    const seq = ++state.enqSeq;
+    state.seqById.set(post.id, seq);
+    post.seq = seq;
+    state.pendingPriority.set(post.id, pr);
+    state.canceledIds.delete(post.id);
     state.elemById.set(post.id, post.elem);
     try { post.elem.dataset.folloneId = post.id; } catch (_) {}
 
-    const pr = (priority === "high") ? "high" : "low";
     if (pr === "high") state.analyzeHigh.push(post);
     else state.analyzeLow.push(post);
 
@@ -1005,10 +1375,23 @@
   }
 
 
+
   function choosePriorityBatch(maxN) {
     const batch = [];
-    while (batch.length < maxN && state.analyzeHigh.length) batch.push(state.analyzeHigh.shift());
-    while (batch.length < maxN && state.analyzeLow.length) batch.push(state.analyzeLow.shift());
+    while (batch.length < maxN && state.analyzeHigh.length) {
+      const p = state.analyzeHigh.shift();
+      if (!p) continue;
+      const current = state.seqById.get(p.id);
+      if (current && p.seq && p.seq !== current) continue;
+      batch.push(p);
+    }
+    while (batch.length < maxN && state.analyzeLow.length) {
+      const p = state.analyzeLow.shift();
+      if (!p) continue;
+      const current = state.seqById.get(p.id);
+      if (current && p.seq && p.seq !== current) continue;
+      batch.push(p);
+    }
     const priority = batch.some(p => isNearViewport(p.elem)) ? "high" : (state.analyzeHigh.length ? "high" : "low");
     return { batch, priority };
   }
@@ -1032,6 +1415,7 @@
 
   async function analyzePump() {
     state.analyzeScheduled = false;
+    ensureRuntimeMaps();
     if (!settings.enabled) return;
     if (state.inFlight) return;
 
@@ -1060,6 +1444,13 @@
       for (const r of results) {
         if (!r || !r.id) continue;
         state.riskCache.set(r.id, r);
+
+        // Persist (id + text-hash)
+        try {
+          const h = getHashForId(r.id);
+          touchPersistentCache(r.id, shrinkResultForCache(r), h);
+        } catch (_e) {}
+
 
         const elem = state.elemById.get(r.id);
         if (!elem) continue;
@@ -1196,6 +1587,7 @@
   function startObservers() {
     // Prefetch observer: starts analysis before user fully sees the post.
     const prefetchIO = new IntersectionObserver((entries) => {
+      ensureRuntimeMaps();
       for (const e of entries) {
         if (!e.isIntersecting) continue;
         const article = e.target;
@@ -1210,6 +1602,7 @@
 
     // Highlight observer: triggers when post is almost fully visible.
     const highlightIO = new IntersectionObserver((entries) => {
+      ensureRuntimeMaps();
       for (const e of entries) {
         const article = e.target;
         if (!e.isIntersecting) continue;
@@ -1279,6 +1672,13 @@
   }
 
   function discoveryPump() {
+    ensureRuntimeMaps();
+    const backlogGuard = state.analyzeHigh.length + state.analyzeLow.length;
+    if (backlogGuard > 140) {
+      log("debug","[DISCOVER]","backlog high -> pause", { backlog: backlogGuard });
+      scheduleDiscovery(220);
+      return;
+    }
     state.discoverScheduled = false;
     const limit = 14; // per pump
     let done = 0;
@@ -1311,6 +1711,7 @@
   // -----------------------------
   (async () => {
     await loadSettings();
+    await loadResultCache();
     log("info","[SETTINGS]","loaded", { enabled: settings.enabled, aiMode: settings.aiMode, debug: settings.debug, logLevel: settings.logLevel, batchSize: settings.batchSize, idleMs: settings.idleMs });
     mountUI();
     chrome.runtime.sendMessage({ type: "FOLLONE_PING" }, (res) => {

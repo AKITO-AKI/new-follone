@@ -195,3 +195,5 @@ document.addEventListener("DOMContentLoaded", () => {
   if ($("backendStatus")) $("backendStatus").addEventListener("click", refreshAiStatus);
   refreshAiStatus();
 });
+
+// v0.4.14: clear cache not inserted due to missing DOMContentLoaded
