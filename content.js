@@ -119,6 +119,16 @@
     riskCache: new Map(),
     elemById: new Map(),
 
+
+    // v0.4.10 pre-analysis pipeline
+    sentForAnalysis: new Set(),
+    intervenedIds: new Set(),
+    analyzeHigh: [],
+    analyzeLow: [],
+    discoverQueue: [],
+    discoverScheduled: false,
+    analyzeScheduled: false,
+    analyzingVisible: new Set(),
     topicHistory: [],
     lastBubbleTs: 0,
 
@@ -409,7 +419,7 @@
     w.querySelector("#follone-start").addEventListener("click", async () => {
       await ensureBackend(true);
       renderWidget();
-      scheduleProcess();
+      scheduleAnalyze(0);
     });
 
     w.querySelector("#follone-toggle").addEventListener("click", async () => {
