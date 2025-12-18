@@ -14,6 +14,53 @@ const LM_OPTIONS = {
   expectedOutputs: [{ type: "text", languages: ["ja"] }],
 };
 
+
+// Priority task queues (v0.4.9)
+// - Because we now "pre-analyze" a lot of posts, we must prioritize near-viewport tasks.
+// - We process tasks sequentially to keep model latency predictable.
+const highQ = [];
+const lowQ = [];
+let busy = false;
+
+function pushTask(task) {
+  const p = task?.priority === "high" ? highQ : lowQ;
+  p.push(task);
+  log("debug", "enqueue", { priority: task?.priority || "low", high: highQ.length, low: lowQ.length });
+  pump();
+}
+
+async function pump() {
+  if (busy) return;
+  const task = highQ.shift() || lowQ.shift();
+  if (!task) return;
+  busy = true;
+  try {
+    const { requestId, batch, topicList } = task;
+    const out = await classifyBatch(Array.isArray(batch) ? batch : [], topicList);
+    chrome.runtime.sendMessage({
+      target: "sw",
+      type: "FOLLONE_OFFSCREEN_RESULT",
+      requestId,
+      ...out,
+    });
+  } catch (e) {
+    chrome.runtime.sendMessage({
+      target: "sw",
+      type: "FOLLONE_OFFSCREEN_RESULT",
+      requestId: task?.requestId,
+      ok: false,
+      status: "error",
+      availability: "unknown",
+      error: String(e),
+      results: []
+    });
+  } finally {
+    busy = false;
+    // Continue
+    setTimeout(pump, 0);
+  }
+}
+
 const RISK_ENUM = ["誹謗中傷", "政治", "偏見", "差別", "詐欺", "成人向け", "その他", "問題なし"];
 
 let session = null;
@@ -165,26 +212,8 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
     }
 
     if (msg.type === "FOLLONE_OFFSCREEN_CLASSIFY") {
-      const { requestId, batch, topicList } = msg;
-      try {
-        const out = await classifyBatch(Array.isArray(batch) ? batch : [], topicList);
-        chrome.runtime.sendMessage({
-          target: "sw",
-          type: "FOLLONE_OFFSCREEN_RESULT",
-          requestId,
-          ...out,
-        });
-      } catch (e) {
-        chrome.runtime.sendMessage({
-          target: "sw",
-          type: "FOLLONE_OFFSCREEN_RESULT",
-          requestId,
-          ok: false,
-          status: "error",
-          error: String(e),
-          results: [],
-        });
-      }
+      const { requestId, batch, topicList, priority } = msg;
+      pushTask({ requestId, batch, topicList, priority: priority === "high" ? "high" : "low" });
       sendResponse({ ok: true }); // immediate ack
       return;
     }

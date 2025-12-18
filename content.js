@@ -218,6 +218,117 @@
   }
 
   // -----------------------------
+  // Loader (startup / navigation)
+  // -----------------------------
+  const loader = {
+    shown: false,
+    kind: "boot", // boot | nav
+    progress: 0,
+    raf: 0,
+    pageToken: 0,
+    firstDoneForToken: new Set()
+  };
+
+  function setLoaderBrand(text) {
+    const brand = document.getElementById("follone-loader-brand");
+    if (!brand) return;
+    // Brand letter-by-letter
+    if (loader.kind === "boot") {
+      const chars = String(text).split("");
+      brand.innerHTML = chars.map((ch, idx) => `<span class="ch" style="animation-delay:${idx * 80}ms">${escapeHtml(ch)}</span>`).join("");
+    } else {
+      brand.textContent = text;
+    }
+  }
+
+  function showLoader(kind, metaLeft) {
+    const el = document.getElementById("follone-loader");
+    if (!el) return;
+    loader.kind = kind;
+    loader.progress = 0;
+    el.classList.add("show");
+    loader.shown = true;
+    lockScroll(true);
+
+    setLoaderBrand(kind === "boot" ? "Follone" : "Now analyzing");
+    const sub = document.getElementById("follone-loader-sub");
+    const quote = document.getElementById("follone-loader-quote");
+    const left = document.getElementById("follone-loader-meta-left");
+    const right = document.getElementById("follone-loader-meta-right");
+    if (sub) sub.textContent = (kind === "boot") ? "タイムラインを整えるよ。" : "ちょい待って。先に見とく。";
+    if (quote) quote.textContent = (kind === "boot") ? "…こんにちは、ふぉろねだよ～。君と一緒に、タイムライン見ちゃお～。" : "…大丈夫。待たせすぎないようにする。";
+    if (left) left.textContent = metaLeft || `mode:${settings.aiMode}`;
+    if (right) right.textContent = "0%";
+    setLoaderProgress(0);
+
+    // pseudo-progress to visualize waiting
+    if (loader.raf) cancelAnimationFrame(loader.raf);
+    const tick = () => {
+      if (!loader.shown) return;
+      // Ease to 85% while waiting
+      const target = 0.85;
+      loader.progress += (target - loader.progress) * 0.03;
+      setLoaderProgress(loader.progress);
+      loader.raf = requestAnimationFrame(tick);
+    };
+    loader.raf = requestAnimationFrame(tick);
+  }
+
+  function setLoaderProgress(p01) {
+    const bar = document.getElementById("follone-loader-bar");
+    const right = document.getElementById("follone-loader-meta-right");
+    const pct = Math.max(0, Math.min(100, Math.round(p01 * 100)));
+    if (bar) bar.style.width = `${pct}%`;
+    if (right) right.textContent = `${pct}%`;
+  }
+
+  function hideLoader() {
+    const el = document.getElementById("follone-loader");
+    if (!el) return;
+    if (!loader.shown) return;
+    loader.shown = false;
+    if (loader.raf) cancelAnimationFrame(loader.raf);
+    // snap to 100 then fade
+    setLoaderProgress(1);
+    setTimeout(() => {
+      el.classList.remove("show");
+      lockScroll(false);
+    }, 260);
+  }
+
+  function markFirstAnalysisDone() {
+    if (loader.firstDoneForToken.has(loader.pageToken)) return;
+    loader.firstDoneForToken.add(loader.pageToken);
+    log("info", "[LOADER]", "first analysis done -> hide", { token: loader.pageToken });
+    hideLoader();
+  }
+
+  function bumpPageToken() {
+    loader.pageToken += 1;
+    log("info", "[NAV]", "pageToken", loader.pageToken, location.pathname);
+  }
+
+  function installNavHooks() {
+    const emit = () => window.dispatchEvent(new Event("follone:navigate"));
+    const origPush = history.pushState;
+    const origReplace = history.replaceState;
+    history.pushState = function(...args){ const r = origPush.apply(this, args); emit(); return r; };
+    history.replaceState = function(...args){ const r = origReplace.apply(this, args); emit(); return r; };
+    window.addEventListener("popstate", emit);
+
+    window.addEventListener("follone:navigate", () => {
+      bumpPageToken();
+      showLoader("nav", `mode:${settings.aiMode}`);
+      // Clear per-page "intervened" so timeline changes can re-trigger on new elements.
+      state.intervenedIds = new Set();
+      // Give the analyzer a head start
+      scheduleDiscovery(0);
+      scheduleAnalyze(0);
+    });
+  }
+
+
+  // -----------------------------
   // UI
   // -----------------------------
   function mountUI() {
@@ -275,6 +386,25 @@
       </div>
     `;
     document.documentElement.appendChild(ov);
+
+    // Fullscreen loader (startup / navigation)
+    if (!document.getElementById("follone-loader")) {
+      const ld = document.createElement("div");
+      ld.id = "follone-loader";
+      ld.innerHTML = `
+        <div class="box">
+          <div class="brand" id="follone-loader-brand"></div>
+          <div class="subtitle" id="follone-loader-sub"></div>
+          <div class="quote" id="follone-loader-quote"></div>
+          <div class="progressWrap"><div class="progressBar" id="follone-loader-bar"></div></div>
+          <div class="meta">
+            <div class="pill" id="follone-loader-meta-left">offline AI</div>
+            <div class="pill" id="follone-loader-meta-right">0%</div>
+          </div>
+        </div>`;
+      document.documentElement.appendChild(ld);
+    }
+
 
     w.querySelector("#follone-start").addEventListener("click", async () => {
       await ensureBackend(true);
@@ -613,7 +743,7 @@
     return batch.map(mockClassifyOne);
   }
 
-  async function classifyBatch(batch) {
+  async function classifyBatch(batch, priority) {
     if (settings.aiMode === "off") return [];
 
     // Try offscreen Prompt API backend first (extension origin).
@@ -622,7 +752,8 @@
         const resp = await chrome.runtime.sendMessage({
           type: "FOLLONE_CLASSIFY_BATCH",
           batch,
-          topicList: settings.topics
+          topicList: settings.topics,
+          priority: priority || "low"
         });
         if (resp && resp.ok && Array.isArray(resp.results)) {
           state.sessionStatus = "ready";
@@ -847,49 +978,75 @@
   // -----------------------------
   // Processing loop
   // -----------------------------
-  function enqueue(post) {
+  function enqueueForAnalysis(post, priority) {
     if (!post || !post.id) return;
     if (state.riskCache.has(post.id)) return;
-    state.queue.push(post);
+    if (state.sentForAnalysis.has(post.id)) return;
+
+    state.sentForAnalysis.add(post.id);
     state.elemById.set(post.id, post.elem);
+    try { post.elem.dataset.folloneId = post.id; } catch (_) {}
+
+    const pr = (priority === "high") ? "high" : "low";
+    if (pr === "high") state.analyzeHigh.push(post);
+    else state.analyzeLow.push(post);
+
+    log("debug", "[QUEUE]", "enqueueForAnalysis", { id: post.id, pr, high: state.analyzeHigh.length, low: state.analyzeLow.length });
   }
 
-  function scheduleProcess() {
-    if (state.inFlight) return;
-    const wait = Math.max(0, settings.idleMs - (Date.now() - state.lastScrollTs));
-    setTimeout(processQueue, wait);
+
+  function choosePriorityBatch(maxN) {
+    const batch = [];
+    while (batch.length < maxN && state.analyzeHigh.length) batch.push(state.analyzeHigh.shift());
+    while (batch.length < maxN && state.analyzeLow.length) batch.push(state.analyzeLow.shift());
+    const priority = batch.some(p => isNearViewport(p.elem)) ? "high" : (state.analyzeHigh.length ? "high" : "low");
+    return { batch, priority };
   }
 
-  async function processQueue() {
-    log("debug","[PROCESS]","tick", { enabled: settings.enabled, inFlight: state.inFlight, queue: state.queue.length, status: state.sessionStatus });
+  function isNearViewport(elem) {
+    try {
+      const r = elem.getBoundingClientRect();
+      const pad = Math.max(1200, window.innerHeight * 2);
+      return r.top < window.innerHeight + pad && r.bottom > -pad;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function scheduleAnalyze(delayMs) {
+    if (state.analyzeScheduled) return;
+    state.analyzeScheduled = true;
+    const d = typeof delayMs === "number" ? delayMs : 120;
+    setTimeout(analyzePump, Math.max(0, d));
+  }
+
+  async function analyzePump() {
+    state.analyzeScheduled = false;
     if (!settings.enabled) return;
     if (state.inFlight) return;
 
-    if (Date.now() - state.lastScrollTs < settings.idleMs) {
-      scheduleProcess();
-      return;
-    }
-
-    // Ensure backend in auto/mock
+    // Keep backend status fresh
     await ensureBackend(false);
     renderWidget();
 
     if (state.sessionStatus === "off") return;
 
-    const batch = [];
-    while (batch.length < settings.batchSize && state.queue.length) {
-      const p = state.queue.shift();
-      if (!p) continue;
-      if (state.riskCache.has(p.id)) continue;
-      batch.push(p);
-    }
+    const backlog = state.analyzeHigh.length + state.analyzeLow.length;
+    if (!backlog) return;
+
+    // Dynamic batch sizing: when backlog is large, use larger batches
+    const maxN = Math.min(8, Math.max(settings.batchSize, backlog > 30 ? settings.batchSize + 2 : settings.batchSize));
+    const { batch, priority } = choosePriorityBatch(maxN);
     if (!batch.length) return;
 
     state.inFlight = true;
     try {
-      log("info","[CLASSIFY]","batch", batch.map(x=>x.id));
-      const results = await classifyBatch(batch);
-      log("info","[CLASSIFY]","results", results.map(x=>({id:x.id, risk:x.riskScore, cat:x.riskCategory, topic:x.topicCategory})));
+      log("info", "[CLASSIFY]", "batch", batch.map(x => x.id), { priority, maxN, backlog });
+      const results = await classifyBatch(batch, priority);
+      log("info", "[CLASSIFY]", "results", results.map(x => ({ id: x.id, risk: x.riskScore, cat: x.riskCategory, topic: x.topicCategory })));
+
+      if (results.length) markFirstAnalysisDone();
+
       for (const r of results) {
         if (!r || !r.id) continue;
         state.riskCache.set(r.id, r);
@@ -897,32 +1054,68 @@
         const elem = state.elemById.get(r.id);
         if (!elem) continue;
 
+        // Update topic stats
         const topic = String(r.topicCategory || "その他");
         updateTopicStats(topic);
 
-        const score = Number(r.riskScore || 0);
-        const cat = String(r.riskCategory || "なし");
-        const sev = severityFor(score);
-
-        if (cat !== "なし" && sev !== "none") {
-          log("warn","[INTERVENE]","show", { id: r.id, cat, score, sev, backend: state.sessionStatus });
-          elem.classList.add("follone-danger");
-          state.riskCount += 1;
-          showIntervention(elem, r);
+        // If this element is currently fully visible, apply decorations now
+        if (isFullyVisible(elem)) {
+          maybeApplyResultToElement(elem, r, { from: "analyzePump" });
+        } else {
+          // If it was marked analyzing, clear marker once we have a result
+          elem.classList.remove("follone-analyzing");
         }
-
-        await maybeShowFilterBubble();
       }
-    } catch (_e) {
-      log("error","[BACKEND]","create() failed -> mock", String(_e));
-      // ignore errors to avoid breaking timeline
+      await maybeShowFilterBubble();
+    } catch (e) {
+      log("error", "[CLASSIFY]", "failed", String(e));
     } finally {
       state.inFlight = false;
-      if (state.queue.length) scheduleProcess();
+      // Continue processing backlog
+      if (state.analyzeHigh.length + state.analyzeLow.length) scheduleAnalyze(40);
     }
   }
 
-  // -----------------------------
+  function isFullyVisible(elem) {
+    try {
+      const r = elem.getBoundingClientRect();
+      const vh = window.innerHeight || document.documentElement.clientHeight;
+      const vw = window.innerWidth || document.documentElement.clientWidth;
+      const visibleH = Math.max(0, Math.min(vh, r.bottom) - Math.max(0, r.top));
+      const visibleW = Math.max(0, Math.min(vw, r.right) - Math.max(0, r.left));
+      const area = Math.max(1, r.width * r.height);
+      const visArea = visibleH * visibleW;
+      return (visArea / area) >= 0.92;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function maybeApplyResultToElement(elem, res, ctx) {
+    const score = Number(res.riskScore || 0);
+    const cat = String(res.riskCategory || "なし");
+    const sev = severityFor(score);
+
+    // "スクロールが止まってから" 介入する（独自改善）
+    if (Date.now() - state.lastScrollTs < 260) {
+      // Defer slightly
+      scheduleAnalyze(120);
+      return;
+    }
+
+    if (cat !== "なし" && sev !== "none") {
+      if (state.intervenedIds.has(res.id)) return;
+      state.intervenedIds.add(res.id);
+
+      elem.classList.add("follone-danger");
+      state.riskCount += 1;
+      log("warn", "[INTERVENE]", "show", { id: res.id, cat, score, sev, backend: state.sessionStatus, from: ctx?.from || "unknown" });
+      showIntervention(elem, res);
+      addXp(xpForIntervention(sev));
+    }
+  }
+
+// -----------------------------
   // Inactive report suggestion
   // -----------------------------
   function sessionSeconds() {
@@ -991,47 +1184,117 @@
   // Observers
   // -----------------------------
   function startObservers() {
-    const io = new IntersectionObserver((entries) => {
+    // Prefetch observer: starts analysis before user fully sees the post.
+    const prefetchIO = new IntersectionObserver((entries) => {
       for (const e of entries) {
         if (!e.isIntersecting) continue;
         const article = e.target;
-        if (state.processed.has(article)) continue;
-        state.processed.add(article);
+        if (article.dataset.folloneDiscovered === "1") continue;
+        article.dataset.folloneDiscovered = "1";
 
-        setTimeout(() => {
-          log("debug","[OBSERVE]","article visible -> extract");
+        // Extract in idle to avoid scroll jank
+        state.discoverQueue.push(article);
+        scheduleDiscovery(0);
+      }
+    }, { root: null, threshold: 0.01, rootMargin: "3500px 0px 3500px 0px" });
+
+    // Highlight observer: triggers when post is almost fully visible.
+    const highlightIO = new IntersectionObserver((entries) => {
+      for (const e of entries) {
+        const article = e.target;
+        if (!e.isIntersecting) continue;
+
+        const id = article.dataset.folloneId;
+        if (!id) {
+          // Try to extract quickly when user actually sees it
           const post = extractPostFromArticle(article);
-          if (!post) return;
-          enqueue(post);
-          log("debug","[QUEUE]","enqueue", { id: post.id, q: state.queue.length });
-          scheduleProcess();
-        }, 350);
-      }
-    }, { root: null, threshold: 0.55 });
+          if (post) {
+            enqueueForAnalysis(post, "high");
+            scheduleAnalyze(0);
+          }
+          article.classList.add("follone-analyzing");
+          continue;
+        }
 
-    const attach = () => {
+        const res = state.riskCache.get(id);
+        if (res) {
+          article.classList.remove("follone-analyzing");
+          maybeApplyResultToElement(article, res, { from: "highlightIO" });
+        } else {
+          // Not yet analyzed: show analyzing badge and prioritize this post now.
+          article.classList.add("follone-analyzing");
+          // If we have the element mapped, create a tiny "priority bump"
+          const post = extractPostFromArticle(article);
+          if (post) {
+            enqueueForAnalysis(post, "high");
+            scheduleAnalyze(0);
+          }
+        }
+      }
+    }, { root: null, threshold: 0.92 });
+
+    function attachAll() {
       for (const a of findTweetArticles()) {
-        if (state.processed.has(a)) continue;
-        io.observe(a);
+        prefetchIO.observe(a);
+        highlightIO.observe(a);
       }
-    };
+    }
 
-    const mo = new MutationObserver(() => attach());
+    const mo = new MutationObserver(() => attachAll());
     mo.observe(document.documentElement, { childList: true, subtree: true });
-    attach();
+    attachAll();
 
+    // Scroll/user activity tracking
     const onUserActivity = () => {
       state.lastScrollTs = Date.now();
       state.lastUserActivityTs = Date.now();
     };
-
     window.addEventListener("scroll", onUserActivity, { passive: true });
     window.addEventListener("mousemove", onUserActivity, { passive: true });
     window.addEventListener("keydown", onUserActivity, { passive: true });
     window.addEventListener("pointerdown", onUserActivity, { passive: true });
 
+    // Inactive suggestion tick
     setInterval(maybeSuggestInactiveReport, 2000);
+
+    // Kick initial discovery/analyze
+    scheduleDiscovery(0);
+    scheduleAnalyze(0);
   }
+
+  function scheduleDiscovery(delayMs) {
+    if (state.discoverScheduled) return;
+    state.discoverScheduled = true;
+    setTimeout(discoveryPump, Math.max(0, typeof delayMs === "number" ? delayMs : 60));
+  }
+
+  function discoveryPump() {
+    state.discoverScheduled = false;
+    const limit = 14; // per pump
+    let done = 0;
+
+    while (done < limit && state.discoverQueue.length) {
+      const article = state.discoverQueue.shift();
+      if (!article) continue;
+      if (state.processed.has(article)) continue;
+      state.processed.add(article);
+
+      const post = extractPostFromArticle(article);
+      if (!post) continue;
+
+      const pr = isNearViewport(article) ? "high" : "low";
+      enqueueForAnalysis(post, pr);
+      done += 1;
+    }
+
+    if (done) {
+      log("debug", "[DISCOVER]", "pump", { done, left: state.discoverQueue.length, high: state.analyzeHigh.length, low: state.analyzeLow.length });
+      scheduleAnalyze(0);
+    }
+
+    if (state.discoverQueue.length) scheduleDiscovery(80);
+  }
+
 
   // -----------------------------
   // Boot
@@ -1047,6 +1310,15 @@
         log("info","[SW]","ping", res);
       }
     });
+    // Startup loader to buy time for pre-analysis
+    if (!sessionStorage.getItem("follone_seenSplash")) {
+      sessionStorage.setItem("follone_seenSplash", "1");
+      bumpPageToken();
+      showLoader("boot", `mode:${settings.aiMode}`);
+    } else {
+      bumpPageToken();
+    }
+
     startObservers();
 
     // Initial backend status (no auto-download)

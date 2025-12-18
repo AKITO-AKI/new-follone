@@ -121,7 +121,7 @@ async function getBackendStatus() {
   return resp;
 }
 
-async function forwardClassify(requestId, batch, topicList) {
+async function forwardClassify(requestId, batch, topicList, priority) {
   const ensured = await ensureOffscreen();
   if (!ensured.ok) {
     chrome.runtime.sendMessage({
@@ -209,7 +209,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       }, 25000);
 
       pending.set(requestId, { sendResponse, timer });
-      await forwardClassify(requestId, batch, topicList);
+      await forwardClassify(requestId, batch, topicList, msg.priority);
       return;
     }
 

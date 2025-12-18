@@ -98,3 +98,101 @@
   gap: 10px;
 }
 #follone-overlay .actions button { flex: 1; }
+
+
+/* -------- follone v0.4.9: loader + analyzing badge -------- */
+#follone-loader {
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  display: none;
+  align-items: center;
+  justify-content: center;
+  background: radial-gradient(1200px 900px at 50% 30%, rgba(255,255,255,0.08), rgba(0,0,0,0.92));
+  backdrop-filter: blur(10px);
+}
+#follone-loader.show { display: flex; }
+#follone-loader .box {
+  width: min(720px, 92vw);
+  padding: 22px 22px 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.35);
+  box-shadow: 0 18px 80px rgba(0,0,0,0.6);
+}
+#follone-loader .brand {
+  font-weight: 950;
+  letter-spacing: 0.08em;
+  font-size: 38px;
+  line-height: 1.1;
+  margin-bottom: 10px;
+}
+#follone-loader .brand .ch {
+  display: inline-block;
+  opacity: 0;
+  transform: translateY(10px);
+  animation: follone-pop 600ms ease forwards;
+}
+@keyframes follone-pop {
+  to { opacity: 1; transform: translateY(0); }
+}
+#follone-loader .subtitle {
+  opacity: 0.9;
+  margin-top: 8px;
+  font-weight: 700;
+}
+#follone-loader .quote {
+  margin-top: 10px;
+  opacity: 0.82;
+  font-size: 14px;
+  line-height: 1.6;
+}
+#follone-loader .progressWrap {
+  margin-top: 16px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(255,255,255,0.05);
+  overflow: hidden;
+}
+#follone-loader .progressBar {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.8);
+  transition: width 240ms linear;
+}
+#follone-loader .meta {
+  margin-top: 10px;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12px;
+  opacity: 0.78;
+}
+#follone-loader .pill {
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.12);
+  background: rgba(0,0,0,0.28);
+}
+
+.follone-analyzing {
+  position: relative;
+  outline: 2px solid rgba(255,255,255,0.12);
+  outline-offset: 2px;
+}
+.follone-analyzing::after {
+  content: "Analyzing…";
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  font-size: 12px;
+  font-weight: 900;
+  padding: 6px 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(255,255,255,0.16);
+  background: rgba(0,0,0,0.55);
+  color: rgba(255,255,255,0.92);
+  pointer-events: none;
+}
