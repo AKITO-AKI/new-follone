@@ -1,112 +1,81 @@
-const DEFAULT_KEYS = [
-  "follone_enabled",
-  "follone_riskThresholdSoft",
-  "follone_riskThresholdHard",
-  "follone_batchSize",
-  "follone_idleMs",
-  "follone_topicWindow",
-  "follone_bubbleDominance",
-  "follone_bubbleEntropy",
-  "follone_bubbleMinSamples",
-  "follone_bubbleCooldownMs",
-  "follone_bubbleUseLLMSuggest",
-  "follone_sessionMinSec",
-  "follone_inactiveSec",
-  "follone_reportCooldownSec",
-  "follone_autoReportSuggest",
-  "follone_personaLazyKind",
-  "follone_explainMode"
-];
+const KEYMAP = {
+  enabled: "follone_enabled",
+  riskSoft: "follone_riskSoftThreshold",
+  riskHard: "follone_riskHardThreshold",
+  batchSize: "follone_batchSize",
+  idleMs: "follone_idleMs",
+  topicWindow: "follone_topicWindow",
+  bubbleMinSamples: "follone_bubbleMinSamples",
+  bubbleDominance: "follone_bubbleDominance",
+  bubbleEntropy: "follone_bubbleEntropy",
+  bubbleCooldownMs: "follone_bubbleCooldownMs",
+  bubbleUseLLM: "follone_bubbleUseLLM",
+  reportMinSeconds: "follone_reportMinSeconds",
+  inactiveSuggestSeconds: "follone_inactiveSuggestSeconds",
+  inactiveCooldownMs: "follone_inactiveCooldownMs",
+  topics: "follone_topics"
+};
 
-function $(id) { return document.getElementById(id); }
-function clamp(n, a, b) {
-  n = Number(n);
-  if (!Number.isFinite(n)) return a;
-  return Math.max(a, Math.min(b, n));
-}
+function $(id){ return document.getElementById(id); }
 
 async function load() {
-  const cur = await chrome.storage.local.get(DEFAULT_KEYS);
+  const keys = Object.values(KEYMAP);
+  const cur = await chrome.storage.local.get(keys);
 
-  $("enabled").checked = cur.follone_enabled ?? true;
-  $("autoReportSuggest").checked = cur.follone_autoReportSuggest ?? true;
+  $("enabled").checked = cur[KEYMAP.enabled] ?? true;
+  $("riskSoft").value = cur[KEYMAP.riskSoft] ?? 60;
+  $("riskHard").value = cur[KEYMAP.riskHard] ?? 75;
+  $("batchSize").value = cur[KEYMAP.batchSize] ?? 3;
+  $("idleMs").value = cur[KEYMAP.idleMs] ?? 650;
 
-  $("batchSize").value = cur.follone_batchSize ?? 3;
-  $("idleMs").value = cur.follone_idleMs ?? 700;
+  $("topicWindow").value = cur[KEYMAP.topicWindow] ?? 30;
+  $("bubbleMinSamples").value = cur[KEYMAP.bubbleMinSamples] ?? 16;
+  $("bubbleDominance").value = cur[KEYMAP.bubbleDominance] ?? 0.62;
+  $("bubbleEntropy").value = cur[KEYMAP.bubbleEntropy] ?? 0.55;
+  $("bubbleCooldownMs").value = cur[KEYMAP.bubbleCooldownMs] ?? (10 * 60 * 1000);
+  $("bubbleUseLLM").checked = cur[KEYMAP.bubbleUseLLM] ?? true;
 
-  $("riskSoft").value = cur.follone_riskThresholdSoft ?? 65;
-  $("riskHard").value = cur.follone_riskThresholdHard ?? 80;
+  $("reportMinSeconds").value = cur[KEYMAP.reportMinSeconds] ?? 60;
+  $("inactiveSuggestSeconds").value = cur[KEYMAP.inactiveSuggestSeconds] ?? 180;
+  $("inactiveCooldownMs").value = cur[KEYMAP.inactiveCooldownMs] ?? (10 * 60 * 1000);
 
-  $("bubbleUseLLM").checked = cur.follone_bubbleUseLLMSuggest ?? true;
-  $("topicWindow").value = cur.follone_topicWindow ?? 40;
-  $("bubbleDominance").value = cur.follone_bubbleDominance ?? 0.58;
-  $("bubbleEntropy").value = cur.follone_bubbleEntropy ?? 0.55;
-  $("bubbleMinSamples").value = cur.follone_bubbleMinSamples ?? 18;
-  $("bubbleCooldownSec").value = Math.round((cur.follone_bubbleCooldownMs ?? (10*60*1000)) / 1000);
-
-  $("sessionMinSec").value = cur.follone_sessionMinSec ?? 60;
-  $("inactiveSec").value = cur.follone_inactiveSec ?? 180;
-  $("reportCooldownSec").value = cur.follone_reportCooldownSec ?? 600;
-
-  $("personaLazyKind").checked = cur.follone_personaLazyKind ?? true;
-  $("explainMode").checked = cur.follone_explainMode ?? true;
+  const topics = cur[KEYMAP.topics];
+  const fallback = [
+    "社会","政治","経済","国際","テック","科学","教育","健康",
+    "スポーツ","エンタメ","音楽","映画/アニメ","ゲーム","趣味",
+    "創作","生活","旅行","歴史","ビジネス","その他"
+  ];
+  $("topics").value = (Array.isArray(topics) ? topics : fallback).slice(0, 30).join("\n");
 }
 
 async function save() {
-  const set = {};
-  set.follone_enabled = $("enabled").checked;
-  set.follone_autoReportSuggest = $("autoReportSuggest").checked;
+  const out = {};
+  out[KEYMAP.enabled] = $("enabled").checked;
+  out[KEYMAP.riskSoft] = Number($("riskSoft").value || 60);
+  out[KEYMAP.riskHard] = Number($("riskHard").value || 75);
+  out[KEYMAP.batchSize] = Number($("batchSize").value || 3);
+  out[KEYMAP.idleMs] = Number($("idleMs").value || 650);
 
-  set.follone_batchSize = clamp($("batchSize").value, 1, 8);
-  set.follone_idleMs = clamp($("idleMs").value, 100, 5000);
+  out[KEYMAP.topicWindow] = Number($("topicWindow").value || 30);
+  out[KEYMAP.bubbleMinSamples] = Number($("bubbleMinSamples").value || 16);
+  out[KEYMAP.bubbleDominance] = Number($("bubbleDominance").value || 0.62);
+  out[KEYMAP.bubbleEntropy] = Number($("bubbleEntropy").value || 0.55);
+  out[KEYMAP.bubbleCooldownMs] = Number($("bubbleCooldownMs").value || (10 * 60 * 1000));
+  out[KEYMAP.bubbleUseLLM] = $("bubbleUseLLM").checked;
 
-  set.follone_riskThresholdSoft = clamp($("riskSoft").value, 0, 100);
-  set.follone_riskThresholdHard = clamp($("riskHard").value, 0, 100);
+  out[KEYMAP.reportMinSeconds] = Number($("reportMinSeconds").value || 60);
+  out[KEYMAP.inactiveSuggestSeconds] = Number($("inactiveSuggestSeconds").value || 180);
+  out[KEYMAP.inactiveCooldownMs] = Number($("inactiveCooldownMs").value || (10 * 60 * 1000));
 
-  set.follone_bubbleUseLLMSuggest = $("bubbleUseLLM").checked;
-  set.follone_topicWindow = clamp($("topicWindow").value, 10, 200);
-  set.follone_bubbleDominance = clamp($("bubbleDominance").value, 0.30, 0.95);
-  set.follone_bubbleEntropy = clamp($("bubbleEntropy").value, 0.10, 0.99);
-  set.follone_bubbleMinSamples = clamp($("bubbleMinSamples").value, 8, 100);
-  set.follone_bubbleCooldownMs = clamp($("bubbleCooldownSec").value, 30, 7200) * 1000;
+  const lines = $("topics").value.split("\n").map(s => s.trim()).filter(Boolean);
+  out[KEYMAP.topics] = lines.slice(0, 30);
 
-  set.follone_sessionMinSec = clamp($("sessionMinSec").value, 10, 600);
-  set.follone_inactiveSec = clamp($("inactiveSec").value, 30, 1800);
-  set.follone_reportCooldownSec = clamp($("reportCooldownSec").value, 30, 7200);
-
-  set.follone_personaLazyKind = $("personaLazyKind").checked;
-  set.follone_explainMode = $("explainMode").checked;
-
-  // keep soft <= hard
-  if (set.follone_riskThresholdSoft > set.follone_riskThresholdHard) {
-    const tmp = set.follone_riskThresholdSoft;
-    set.follone_riskThresholdSoft = set.follone_riskThresholdHard;
-    set.follone_riskThresholdHard = tmp;
-  }
-
-  await chrome.storage.local.set(set);
-  status("保存しました");
+  await chrome.storage.local.set(out);
+  $("status").textContent = "保存しました。";
+  setTimeout(() => $("status").textContent = "", 1500);
 }
 
-async function reset() {
-  // easiest: clear only our keys so sw.js re-seeds defaults on next install/update
-  // but clearing would also reset XP, so we reset config keys only.
-  const toRemove = DEFAULT_KEYS.filter(k => !["follone_xp", "follone_level"].includes(k));
-  await chrome.storage.local.remove(toRemove);
-  await load();
-  status("初期値に戻しました（XP/Lvは保持）");
-}
-
-let timer = null;
-function status(text) {
-  const el = $("status");
-  el.textContent = text;
-  if (timer) clearTimeout(timer);
-  timer = setTimeout(() => (el.textContent = ""), 2500);
-}
-
-document.addEventListener("DOMContentLoaded", async () => {
-  await load();
+document.addEventListener("DOMContentLoaded", () => {
+  load();
   $("save").addEventListener("click", save);
-  $("reset").addEventListener("click", reset);
 });
