@@ -304,6 +304,18 @@
         }
       }
       parts.push(`userActivation:${navigator.userActivation?.isActive ? "active" : "inactive"}`);
+
+      try {
+        const b = await chrome.runtime.sendMessage({ type: "FOLLONE_BACKEND_STATUS" });
+        if (b && b.ok) {
+          parts.push(`offscreen:${String(b.availability || "-")}/${String(b.status || "-")}`);
+        } else {
+          parts.push(`offscreen:na`);
+        }
+      } catch (e) {
+        parts.push(`offscreen:err`);
+      }
+
       parts.push(`backend:${state.sessionStatus}`);
       if (meta) meta.textContent = parts.join(" / ");
     });
@@ -341,76 +353,48 @@
   // -----------------------------
   async function ensureBackend(userInitiated) {
     log("debug","[BACKEND]","ensureBackend", { userInitiated, aiMode: settings.aiMode, status: state.sessionStatus });
+
     if (settings.aiMode === "off") {
       state.sessionStatus = "off";
-      state.session = null;
       return false;
     }
 
-    // If already created
-    if (state.session) return true;
-    if (state.sessionStatus === "mock") return true;
-
-    // If explicitly mock
     if (settings.aiMode === "mock") {
       state.sessionStatus = "mock";
       return true;
     }
 
-    // auto: try Prompt API, fall back to mock
-    if (typeof LanguageModel === "undefined") {
-      log("warn","[BACKEND]","LanguageModel is undefined (API not exposed in this context)");
-      state.sessionStatus = "mock";
-      return true;
-    }
-
-    let availability = "unavailable";
+    // auto: Ask SW/offscreen backend (extension origin) for status.
     try {
-      availability = await LanguageModel.availability(LM_OPTIONS);
-      log("info","[BACKEND]","availability", availability);
-    } catch (_e) {
-      log("error","[BACKEND]","create() failed -> mock", String(_e));
-      availability = "unavailable";
-      log("warn","[BACKEND]","availability() threw -> unavailable");
-    }
-
-    if (availability === "unavailable") {
-      // API exists but device doesn't meet requirements or feature disabled; fall back to mock.
-      state.sessionStatus = "mock";
-      return true;
-    }
-
-    // Avoid auto-starting download without user action
-    if ((availability === "downloadable" || availability === "downloading") && !userInitiated) {
-      state.sessionStatus = "not_ready";
-      return false;
-    }
-
-    try {
-      state.sessionStatus = availability === "downloading" ? "downloading" : "not_ready";
-      renderWidget();
-
-      log("info","[BACKEND]","create() start");
-      state.session = await LanguageModel.create({
-        ...LM_OPTIONS,
-        monitor(m) {
-          m.addEventListener("downloadprogress", (e) => {
-            state.sessionStatus = "downloading";
-            const pct = Math.round((e.loaded || 0) * 100);
-            setSub(`モデルDL中… ${pct}% / ${settings.enabled ? "ON" : "OFF"}`);
-          });
+      const resp = await chrome.runtime.sendMessage({ type: "FOLLONE_BACKEND_STATUS" });
+      if (resp && resp.ok) {
+        // Map backend states into UI states
+        const a = String(resp.availability || "");
+        const s = String(resp.status || "");
+        if (a === "available" && (s === "ready" || resp.hasSession)) {
+          state.sessionStatus = "ready";
+          log("info","[BACKEND]","sw/offscreen ready", resp);
+          return true;
         }
-      });
-
-      state.sessionStatus = "ready";
-      log("info","[BACKEND]","create() success -> ready");
-      return true;
-    } catch (_e) {
-      log("error","[BACKEND]","create() failed -> mock", String(_e));
-      state.sessionStatus = "mock";
-      state.session = null;
-      return true;
+        if (a === "downloadable" || a === "downloading" || s === "downloadable" || s === "downloading") {
+          state.sessionStatus = a || s;
+          log("warn","[BACKEND]","model not ready (needs warmup)", resp);
+          // In this state, we keep mock fallback; options page provides a safe click to download.
+          return true;
+        }
+        if (a === "unavailable" || s === "unavailable") {
+          state.sessionStatus = "unavailable";
+          log("warn","[BACKEND]","Prompt API unavailable", resp);
+          return true;
+        }
+      }
+    } catch (e) {
+      log("warn","[BACKEND]","backend status failed", String(e));
     }
+
+    // Fallback
+    state.sessionStatus = "mock";
+    return true;
   }
 
   // -----------------------------
@@ -630,13 +614,30 @@
   }
 
   async function classifyBatch(batch) {
-    // Backend routing
     if (settings.aiMode === "off") return [];
 
-    if (state.sessionStatus === "ready" && state.session) {
-      return classifyBatchPromptAPI(batch);
+    // Try offscreen Prompt API backend first (extension origin).
+    if (settings.aiMode === "auto") {
+      try {
+        const resp = await chrome.runtime.sendMessage({
+          type: "FOLLONE_CLASSIFY_BATCH",
+          batch,
+          topicList: settings.topics
+        });
+        if (resp && resp.ok && Array.isArray(resp.results)) {
+          state.sessionStatus = "ready";
+          return resp.results;
+        }
+        // If backend reports not-ready/unavailable, keep sessionStatus for UX, then fall back to mock.
+        if (resp && resp.status) {
+          state.sessionStatus = String(resp.status);
+        }
+      } catch (e) {
+        log("warn","[CLASSIFY]","SW classify failed -> mock", String(e));
+      }
     }
-    // mock
+
+    // mock (no cost, always available)
     return classifyBatchMock(batch);
   }
 

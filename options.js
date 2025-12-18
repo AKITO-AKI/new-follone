@@ -88,7 +88,110 @@ async function save() {
   setTimeout(() => $("status").textContent = "", 1500);
 }
 
+
+
+// -----------------------------
+// Prompt API warm-up (one-time download trigger)
+// -----------------------------
+const LM_OPTIONS = {
+  expectedInputs: [{ type: "text", languages: ["ja", "en"] }],
+  expectedOutputs: [{ type: "text", languages: ["ja"] }]
+};
+
+function setAiStatus(text) {
+  const el = $("aiStatus");
+  if (el) el.textContent = String(text || "");
+}
+
+async function refreshAiStatus() {
+  const lines = [];
+  lines.push(`LanguageModel: ${typeof LanguageModel}`);
+
+  if (typeof LanguageModel !== "undefined") {
+    try {
+      const a = await LanguageModel.availability(LM_OPTIONS);
+      lines.push(`availability: ${a}`);
+    } catch (e) {
+      lines.push(`availability error: ${String(e)}`);
+    }
+  } else {
+    lines.push("※このページでLanguageModelが見えない場合、Chrome/フラグ/配布状態が未対応の可能性があります。");
+  }
+
+  try {
+    const b = await chrome.runtime.sendMessage({ type: "FOLLONE_BACKEND_STATUS" });
+    if (b && b.ok) {
+      lines.push(`offscreen availability: ${b.availability}`);
+      lines.push(`offscreen status: ${b.status}`);
+      lines.push(`offscreen hasSession: ${Boolean(b.hasSession)}`);
+    } else {
+      lines.push(`offscreen status: (no response)`);
+    }
+  } catch (e) {
+    lines.push(`offscreen status error: ${String(e)}`);
+  }
+
+  setAiStatus(lines.join("\n"));
+}
+
+async function warmupModel() {
+  const lines = [];
+  lines.push("Warm-up start...");
+
+  if (typeof LanguageModel === "undefined") {
+    lines.push("LanguageModel is undefined in options page.");
+    setAiStatus(lines.join("\n"));
+    return;
+  }
+
+  let availability = "unknown";
+  try {
+    availability = await LanguageModel.availability(LM_OPTIONS);
+    lines.push(`availability: ${availability}`);
+  } catch (e) {
+    lines.push(`availability error: ${String(e)}`);
+    setAiStatus(lines.join("\n"));
+    return;
+  }
+
+  // If model needs download, this click is treated as a user activation.
+  try {
+    const session = await LanguageModel.create({
+      ...LM_OPTIONS,
+      monitor(m) {
+        try {
+          m.addEventListener("downloadprogress", (e) => {
+            const p = Math.round((e.loaded / e.total) * 100);
+            setAiStatus(lines.concat([`download: ${p}% (${e.loaded}/${e.total})`]).join("\n"));
+          });
+        } catch (_) {}
+      }
+    });
+
+    // Tiny verification prompt (kept neutral).
+    try {
+      await session.prompt("OK とだけ返して。");
+      lines.push("prompt: ok");
+    } catch (e) {
+      lines.push(`prompt error: ${String(e)}`);
+    }
+
+    lines.push("Warm-up done. X上のfolloneはoffscreen経由でPrompt APIを使います。");
+    setAiStatus(lines.join("\n"));
+  } catch (e) {
+    lines.push(`create() error: ${String(e)}`);
+    lines.push("downloadable/downloading の場合は、Chrome再起動・フラグ確認後にもう一度押してください。");
+    setAiStatus(lines.join("\n"));
+  }
+
+  await refreshAiStatus();
+}
+
+
 document.addEventListener("DOMContentLoaded", () => {
   load();
   $("save").addEventListener("click", save);
+  if ($("warmup")) $("warmup").addEventListener("click", warmupModel);
+  if ($("backendStatus")) $("backendStatus").addEventListener("click", refreshAiStatus);
+  refreshAiStatus();
 });

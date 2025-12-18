@@ -14,3 +14,7 @@ button:hover{background:rgba(255,255,255,0.18)}
 #status{font-size:12px;opacity:0.8}
 
 select{width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:#fff;padding:10px}
+
+
+.muted{font-size:12px;opacity:0.75;line-height:1.5}
+.pre{white-space:pre-wrap;word-break:break-word;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:12px;padding:10px;margin:6px 0 0 0;font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono","Courier New",monospace;font-size:12px;}

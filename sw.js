@@ -1,4 +1,4 @@
-// follone service worker (MV3) v0.4.7
+// follone service worker (MV3) v0.4.8
 const DEFAULTS = {
   follone_enabled: true,
   follone_aiMode: "auto", // auto | mock | off
@@ -49,6 +49,106 @@ chrome.runtime.onInstalled.addListener(async (details) => {
   }
 });
 
+// -----------------------------
+// Offscreen document broker (Prompt API host)
+// -----------------------------
+const OFFSCREEN_URL = "offscreen.html";
+const pending = new Map(); // requestId -> { sendResponse, timer }
+
+function makeId() {
+  try {
+    return crypto.randomUUID();
+  } catch (_) {
+    return String(Date.now()) + "_" + Math.random().toString(16).slice(2);
+  }
+}
+
+function sendMessageP(message) {
+  return new Promise((resolve) => {
+    chrome.runtime.sendMessage(message, (resp) => {
+      const err = chrome.runtime.lastError;
+      if (err) resolve({ ok: false, error: err.message });
+      else resolve(resp);
+    });
+  });
+}
+
+async function hasOffscreen() {
+  // Prefer runtime.getContexts when available.
+  try {
+    if (chrome.runtime.getContexts) {
+      const contexts = await chrome.runtime.getContexts({
+        contextTypes: ["OFFSCREEN_DOCUMENT"],
+        documentUrls: [chrome.runtime.getURL(OFFSCREEN_URL)]
+      });
+      return Array.isArray(contexts) && contexts.length > 0;
+    }
+  } catch (_) {}
+
+  // Fallback: best-effort — assume absent and try createDocument.
+  return false;
+}
+
+async function ensureOffscreen() {
+  if (!chrome.offscreen || !chrome.offscreen.createDocument) {
+    return { ok: false, error: "offscreen API not available" };
+  }
+  const exists = await hasOffscreen();
+  if (exists) return { ok: true };
+
+  try {
+    await chrome.offscreen.createDocument({
+      url: OFFSCREEN_URL,
+      reasons: ["DOM_PARSER"],
+      justification: "Run built-in Prompt API in extension origin (document context) for timeline classification."
+    });
+  } catch (e) {
+    // If it already exists (older Chrome without getContexts), treat as success.
+    const msg = String(e?.message || e);
+    if (!msg.includes("Only one offscreen") && !msg.includes("already")) {
+      return { ok: false, error: msg };
+    }
+  }
+  return { ok: true };
+}
+
+async function getBackendStatus() {
+  const ensured = await ensureOffscreen();
+  if (!ensured.ok) return { ok: false, status: "unavailable", availability: "no_offscreen", error: ensured.error };
+
+  const resp = await sendMessageP({ target: "offscreen", type: "FOLLONE_OFFSCREEN_STATUS" });
+  if (!resp || !resp.ok) return { ok: false, status: "unavailable", availability: "error", error: resp?.error || "no_response" };
+  return resp;
+}
+
+async function forwardClassify(requestId, batch, topicList) {
+  const ensured = await ensureOffscreen();
+  if (!ensured.ok) {
+    chrome.runtime.sendMessage({
+      target: "sw",
+      type: "FOLLONE_OFFSCREEN_RESULT",
+      requestId,
+      ok: false,
+      status: "unavailable",
+      availability: "no_offscreen",
+      error: ensured.error,
+      results: []
+    });
+    return;
+  }
+
+  // Fire-and-forget; offscreen posts result back to SW via runtime message.
+  chrome.runtime.sendMessage({
+    target: "offscreen",
+    type: "FOLLONE_OFFSCREEN_CLASSIFY",
+    requestId,
+    batch,
+    topicList
+  }, () => {
+    // ignore ack; lastError here is not actionable; timeout will cover it.
+  });
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (!msg || typeof msg.type !== "string") {
@@ -56,8 +156,60 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
+    // Offscreen -> SW result relay
+    if (msg.target === "sw" && msg.type === "FOLLONE_OFFSCREEN_RESULT") {
+      const requestId = msg.requestId;
+      const p = pending.get(requestId);
+      if (p) {
+        clearTimeout(p.timer);
+        pending.delete(requestId);
+        p.sendResponse({
+          ok: Boolean(msg.ok),
+          status: msg.status,
+          availability: msg.availability,
+          results: Array.isArray(msg.results) ? msg.results : [],
+          error: msg.error
+        });
+      }
+      // No response expected for this message
+      sendResponse({ ok: true });
+      return;
+    }
+
     if (msg.type === "FOLLONE_PING") {
       sendResponse({ ok: true, sw: "ok", sender: sender?.url || "" });
+      return;
+    }
+
+    if (msg.type === "FOLLONE_BACKEND_STATUS") {
+      const s = await getBackendStatus();
+      // Normalize shape expected by content.js
+      sendResponse({
+        ok: Boolean(s.ok),
+        status: s.status || "unavailable",
+        availability: s.availability || "unavailable",
+        hasSession: Boolean(s.hasSession),
+        sessionAgeSec: s.sessionAgeSec || 0,
+        error: s.error
+      });
+      return;
+    }
+
+    if (msg.type === "FOLLONE_CLASSIFY_BATCH") {
+      const requestId = makeId();
+      const batch = Array.isArray(msg.batch) ? msg.batch : [];
+      const topicList = Array.isArray(msg.topicList) ? msg.topicList : [];
+
+      // Keep the message channel open.
+      const timer = setTimeout(() => {
+        const p = pending.get(requestId);
+        if (!p) return;
+        pending.delete(requestId);
+        p.sendResponse({ ok: false, status: "timeout", availability: "unknown", results: [], error: "timeout" });
+      }, 25000);
+
+      pending.set(requestId, { sendResponse, timer });
+      await forwardClassify(requestId, batch, topicList);
       return;
     }
 

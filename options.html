@@ -110,7 +110,22 @@
       </div>
     </section>
 
-    
+
+    <section class="card">
+      <h2>Prompt API / モデル準備</h2>
+      <div class="muted">
+        初回はモデルのダウンロードが必要です。ダウンロード開始には「ユーザー操作（クリック）」が必要になる場合があります。<br>
+        ここで一度「AIモデルを準備」を押しておくと、X上ではオフスクリーン（拡張機能側）でPrompt APIが動くようになります。
+      </div>
+      <div class="grid2" style="margin-top:10px;">
+        <button id="warmup" type="button">AIモデルを準備（初回のみ）</button>
+        <button id="backendStatus" type="button">バックエンド状態</button>
+      </div>
+      <div class="muted" style="margin-top:8px;">状態:</div>
+      <pre id="aiStatus" class="pre"></pre>
+    </section>
+
+
     <section class="card">
       <h2>デバッグ</h2>
       <label class="row">
