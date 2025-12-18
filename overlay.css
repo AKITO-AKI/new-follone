@@ -83,6 +83,7 @@
   opacity: 0.72;
   font-size: 12px;
   margin-top: 10px;
+  white-space: pre-wrap;
 }
 
 #follone-widget .pill {

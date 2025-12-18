@@ -1,13 +1,14 @@
 {
   "manifest_version": 3,
-  "name": "follone for X (v0.4.2)",
-  "version": "0.4.2",
+  "name": "follone for X (v0.4.4)",
+  "version": "0.4.4",
   "description": "XのタイムラインをローカルAI（Prompt API / Gemini Nano）で補助。危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート。",
   "permissions": [
     "storage"
   ],
   "host_permissions": [
-    "https://x.com/*"
+    "https://x.com/*",
+    "https://twitter.com/*"
   ],
   "background": {
     "service_worker": "sw.js",
@@ -16,7 +17,8 @@
   "content_scripts": [
     {
       "matches": [
-        "https://x.com/*"
+        "https://x.com/*",
+        "https://twitter.com/*"
       ],
       "js": [
         "content.js"

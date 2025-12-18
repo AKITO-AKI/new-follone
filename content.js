@@ -49,6 +49,16 @@
   // ----------------------------
   const RISK_ENUM = ["誹謗中傷", "政治", "偏見", "差別", "詐欺", "成人向け", "なし"];
 
+  // Prompt API language/modality options (keep consistent across availability/create)
+  const LM_OPTIONS = {
+    expectedInputs: [
+      { type: "text", languages: ["ja", "en"] }
+    ],
+    expectedOutputs: [
+      { type: "text", languages: ["ja"] }
+    ]
+  };
+
   // ----------------------------
   // Structured output schemas
   // ----------------------------
@@ -245,7 +255,30 @@
     }
   }
 
-  function mountUI() {
+  
+  async function runDiagnostics() {
+    const lines = [];
+    const uaActive = !!(navigator.userActivation && navigator.userActivation.isActive);
+    lines.push(`userActivation: ${uaActive ? "active" : "inactive"}`);
+    lines.push(`LanguageModel: ${typeof LanguageModel}`);
+
+    if (typeof LanguageModel !== "undefined") {
+      try {
+        const a = await LanguageModel.availability(LM_OPTIONS);
+        lines.push(`availability: ${a}`);
+      } catch (e) {
+        lines.push(`availability error: ${e?.name || e}`);
+      }
+    }
+
+    lines.push("hint: X側のFedCM/GraphQL/Install-banner系ログはサイト由来で、Prompt APIとは無関係。");
+    lines.push("hint: unavailable の場合は chrome://flags で optimization-guide-on-device-model と prompt-api-for-gemini-nano を有効化し、chrome://on-device-internals の Model Status を確認。");
+
+    const el = document.getElementById("follone-diag");
+    if (el) el.textContent = lines.join("\n");
+  }
+
+function mountUI() {
     if (document.getElementById("follone-widget")) return;
 
     const w = document.createElement("div");
@@ -271,8 +304,10 @@
           </div>
           <div class="row">
             <button id="follone-settings-btn" class="secondary">設定</button>
+            <button id="follone-diag-btn" class="secondary">診断</button>
           </div>
           <div class="meta" id="follone-meta"></div>
+          <div class="meta" id="follone-diag"></div>
           <div id="follone-pills"></div>
         </div>
       </div>
@@ -342,6 +377,7 @@
     w.querySelector("#follone-end-btn").addEventListener("click", () => openReport(true));
 
     w.querySelector("#follone-settings-btn").addEventListener("click", openOptionsSafe);
+    w.querySelector("#follone-diag-btn").addEventListener("click", runDiagnostics);
 
     document.getElementById("follone-report-close").addEventListener("click", closeReport);
     document.getElementById("follone-report-end").addEventListener("click", () => {
@@ -662,7 +698,7 @@ function xpForIntervention(sev) { return sev === "hard" ? 10 : 6; }
     }
 
     let availability = "unavailable";
-    try { availability = await LanguageModel.availability(); } catch (_e) {}
+    try { availability = await LanguageModel.availability(LM_OPTIONS); } catch (_e) {}
 
     if (availability === "unavailable") {
       state.sessionStatus = "unavailable";
@@ -681,18 +717,14 @@ function xpForIntervention(sev) { return sev === "hard" ? 10 : 6; }
       renderWidget();
 
       state.session = await LanguageModel.create({
-        expectedInputs: [
-          { type: "text", languages: ["ja", "en"] }
-        ],
-        expectedOutputs: [
-          { type: "text", languages: ["ja"] }
-        ],
+        ...LM_OPTIONS,
         monitor(m) {
           m.addEventListener("downloadprogress", (e) => {
             state.sessionStatus = "downloading";
             const pct = Math.round((e.loaded || 0) * 100);
-            setSub(`モデルDL中… ${pct}%`);
-          });
+            setSub(`モデルDL中… ${pct}
+      });
+
         }
       });
 
@@ -722,10 +754,10 @@ ${buildPersonaLine()}
 【トピックカテゴリ】${TOPIC_CATEGORIES.join(" / ")}
 
 制約:
-- 出力は responseConstraint に合致する JSON のみ（余計な文は禁止）
-- summary は日本語で短く（50文字目安）。差別語・罵倒語・露骨な性的表現をそのまま再掲しない（言い換える）。端的に投稿の意図を解説する。
-- explanation は「なぜ注意なのか」「どう行動するとよいか」を説明重視で。断定しすぎず、可能性として述べる
-- suggestedSearches は、X内検索に使える安全な語句を最大3つ（中立・学習/検証/別視点のため）
+- 出力はresponseConstraint に合致する JSON のみ（余計な文は禁止）
+- summaryは日本語で短く（100文字目安）。差別語・罵倒語・露骨な性的表現をそのまま再掲しない（言い換える）
+- explanationは「なぜ注意なのか」「どう行動するとよいか」を説明重視で。断定しすぎず、可能性として述べる
+- suggestedSearchesは、X内検索に使える安全な語句を最大3つ（中立・学習/検証/別視点のため）
 - 投稿の政治的主張に同調/反対の誘導はしない（検証・一次情報・複数視点の提示に留める）
 
 ${batch.map(p => `ID:${p.id}\nTEXT:${p.text}\nMETA:${p.meta}`).join("\n\n---\n\n")}
@@ -1090,7 +1122,7 @@ X内検索へ誘導する「安全で中立な検索語句」を最大3つ提案
     // show availability but don't start download until user click
     try {
       if (typeof LanguageModel !== "undefined") {
-        const a = await LanguageModel.availability();
+        const a = await LanguageModel.availability(LM_OPTIONS);
         state.sessionStatus = (a === "unavailable") ? "unavailable" : "not_ready";
       } else {
         state.sessionStatus = "unavailable";
@@ -1101,4 +1133,3 @@ X内検索へ誘導する「安全で中立な検索語句」を最大3つ提案
     renderWidget();
   })();
 })();
-
