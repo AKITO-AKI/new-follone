@@ -31,6 +31,8 @@
   // -----------------------------
   const settings = {
     enabled: true,
+    debug: true,
+    logLevel: "info", // debug | info | warn | error
     aiMode: "auto", // auto | mock | off
     riskSoft: 60,
     riskHard: 75,
@@ -68,7 +70,9 @@
       "follone_reportMinSeconds",
       "follone_inactiveSuggestSeconds",
       "follone_inactiveCooldownMs",
-      "follone_topics"
+      "follone_topics",
+      "follone_debug",
+      "follone_logLevel"
     ]);
 
     if (cur.follone_enabled !== undefined) settings.enabled = !!cur.follone_enabled;
@@ -89,6 +93,9 @@
     if (cur.follone_reportMinSeconds !== undefined) settings.reportMinSeconds = clampInt(cur.follone_reportMinSeconds, 10, 3600, 60);
     if (cur.follone_inactiveSuggestSeconds !== undefined) settings.inactiveSuggestSeconds = clampInt(cur.follone_inactiveSuggestSeconds, 30, 3600, 180);
     if (cur.follone_inactiveCooldownMs !== undefined) settings.inactiveCooldownMs = clampInt(cur.follone_inactiveCooldownMs, 10_000, 3_600_000, 600_000);
+
+    if (cur.follone_debug !== undefined) settings.debug = !!cur.follone_debug;
+    if (cur.follone_logLevel !== undefined) settings.logLevel = String(cur.follone_logLevel || "info");
 
     if (Array.isArray(cur.follone_topics) && cur.follone_topics.length) {
       settings.topics = cur.follone_topics.map(s => String(s).trim()).filter(Boolean).slice(0, 30);
@@ -121,6 +128,45 @@
   };
 
   // -----------------------------
+  // Logging
+  // -----------------------------
+  const LOG_PREFIX = "[follone]";
+  const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
+  const ring = [];
+  const RING_MAX = 80;
+
+  function shouldLog(level) {
+    if (!settings.debug) return false;
+    const cur = LEVELS[settings.logLevel] ?? 20;
+    const want = LEVELS[level] ?? 20;
+    return want >= cur;
+  }
+
+  function pushRing(line) {
+    ring.push(line);
+    if (ring.length > RING_MAX) ring.shift();
+    const box = document.getElementById("follone-logbox");
+    if (box) {
+      box.textContent = ring.slice(-10).join("\n");
+    }
+  }
+
+  function log(level, tag, ...args) {
+    if (!shouldLog(level)) return;
+    const t = new Date().toISOString().slice(11, 19);
+    const head = `${LOG_PREFIX} ${t} ${tag}`;
+    const fn = console[level] || console.log;
+    fn.call(console, head, ...args);
+    try {
+      const line = [head, ...args.map(a => (typeof a === "string" ? a : JSON.stringify(a)))].join(" ");
+      pushRing(line.length > 400 ? line.slice(0, 400) + "…" : line);
+    } catch (_e) {
+      log("error","[BACKEND]","create() failed -> mock", String(_e));
+      pushRing(head + " (unserializable)");
+    }
+  }
+
+// -----------------------------
   // Utils
   // -----------------------------
   function clampInt(v, min, max, fallback) {
@@ -175,6 +221,7 @@
   // UI
   // -----------------------------
   function mountUI() {
+    log("info","[UI]","mountUI");
     if (document.getElementById("follone-widget")) return;
 
     const w = document.createElement("div");
@@ -280,7 +327,7 @@
     if (state.sessionStatus === "off") backendLabel = "OFF";
     if (state.sessionStatus === "unavailable") backendLabel = "利用不可";
 
-    let sub = `${enabled} / AI:${backendLabel}`;
+    let sub = `${enabled} / AI:${backendLabel} / mode:${settings.aiMode}`;
     if (state.sessionStatus === "downloading") sub = `モデルDL中… ${enabled}`;
     setSub(sub);
 
@@ -293,6 +340,7 @@
   // Backend selection
   // -----------------------------
   async function ensureBackend(userInitiated) {
+    log("debug","[BACKEND]","ensureBackend", { userInitiated, aiMode: settings.aiMode, status: state.sessionStatus });
     if (settings.aiMode === "off") {
       state.sessionStatus = "off";
       state.session = null;
@@ -311,6 +359,7 @@
 
     // auto: try Prompt API, fall back to mock
     if (typeof LanguageModel === "undefined") {
+      log("warn","[BACKEND]","LanguageModel is undefined (API not exposed in this context)");
       state.sessionStatus = "mock";
       return true;
     }
@@ -318,8 +367,11 @@
     let availability = "unavailable";
     try {
       availability = await LanguageModel.availability(LM_OPTIONS);
+      log("info","[BACKEND]","availability", availability);
     } catch (_e) {
+      log("error","[BACKEND]","create() failed -> mock", String(_e));
       availability = "unavailable";
+      log("warn","[BACKEND]","availability() threw -> unavailable");
     }
 
     if (availability === "unavailable") {
@@ -338,6 +390,7 @@
       state.sessionStatus = availability === "downloading" ? "downloading" : "not_ready";
       renderWidget();
 
+      log("info","[BACKEND]","create() start");
       state.session = await LanguageModel.create({
         ...LM_OPTIONS,
         monitor(m) {
@@ -350,8 +403,10 @@
       });
 
       state.sessionStatus = "ready";
+      log("info","[BACKEND]","create() success -> ready");
       return true;
     } catch (_e) {
+      log("error","[BACKEND]","create() failed -> mock", String(_e));
       state.sessionStatus = "mock";
       state.session = null;
       return true;
@@ -458,6 +513,7 @@
       const obj = JSON.parse(raw);
       return Array.isArray(obj && obj.results) ? obj.results : [];
     } catch (_e) {
+      log("error","[BACKEND]","create() failed -> mock", String(_e));
       return [];
     }
   }
@@ -637,6 +693,7 @@
     if (!trigger) return;
 
     state.lastBubbleTs = now;
+    log("info","[BUBBLE]","trigger", { topCat, dominance, entropy: ent, samples: hist.length });
 
     // If Prompt API is available, we could do nicer suggestions. If not, use underrepresented topics.
     let suggestions = pickUnderrepresentedTopics(3);
@@ -671,6 +728,7 @@
       const cleaned = qs.map(s => String(s).trim()).filter(Boolean).slice(0, 3);
       return cleaned.length ? cleaned : fallbackTopics;
     } catch (_e) {
+      log("error","[BACKEND]","create() failed -> mock", String(_e));
       return fallbackTopics;
     }
   }
@@ -802,6 +860,7 @@
   }
 
   async function processQueue() {
+    log("debug","[PROCESS]","tick", { enabled: settings.enabled, inFlight: state.inFlight, queue: state.queue.length, status: state.sessionStatus });
     if (!settings.enabled) return;
     if (state.inFlight) return;
 
@@ -827,7 +886,9 @@
 
     state.inFlight = true;
     try {
+      log("info","[CLASSIFY]","batch", batch.map(x=>x.id));
       const results = await classifyBatch(batch);
+      log("info","[CLASSIFY]","results", results.map(x=>({id:x.id, risk:x.riskScore, cat:x.riskCategory, topic:x.topicCategory})));
       for (const r of results) {
         if (!r || !r.id) continue;
         state.riskCache.set(r.id, r);
@@ -843,6 +904,7 @@
         const sev = severityFor(score);
 
         if (cat !== "なし" && sev !== "none") {
+          log("warn","[INTERVENE]","show", { id: r.id, cat, score, sev, backend: state.sessionStatus });
           elem.classList.add("follone-danger");
           state.riskCount += 1;
           showIntervention(elem, r);
@@ -851,6 +913,7 @@
         await maybeShowFilterBubble();
       }
     } catch (_e) {
+      log("error","[BACKEND]","create() failed -> mock", String(_e));
       // ignore errors to avoid breaking timeline
     } finally {
       state.inFlight = false;
@@ -935,9 +998,11 @@
         state.processed.add(article);
 
         setTimeout(() => {
+          log("debug","[OBSERVE]","article visible -> extract");
           const post = extractPostFromArticle(article);
           if (!post) return;
           enqueue(post);
+          log("debug","[QUEUE]","enqueue", { id: post.id, q: state.queue.length });
           scheduleProcess();
         }, 350);
       }
@@ -972,7 +1037,15 @@
   // -----------------------------
   (async () => {
     await loadSettings();
+    log("info","[SETTINGS]","loaded", { enabled: settings.enabled, aiMode: settings.aiMode, debug: settings.debug, logLevel: settings.logLevel, batchSize: settings.batchSize, idleMs: settings.idleMs });
     mountUI();
+    chrome.runtime.sendMessage({ type: "FOLLONE_PING" }, (res) => {
+      if (chrome.runtime.lastError) {
+        log("warn","[SW]","ping failed", chrome.runtime.lastError.message);
+      } else {
+        log("info","[SW]","ping", res);
+      }
+    });
     startObservers();
 
     // Initial backend status (no auto-download)
@@ -988,6 +1061,7 @@
           const a = await LanguageModel.availability(LM_OPTIONS);
           state.sessionStatus = (a === "unavailable") ? "mock" : "not_ready";
         } catch (_e) {
+      log("error","[BACKEND]","create() failed -> mock", String(_e));
           state.sessionStatus = "mock";
         }
       }

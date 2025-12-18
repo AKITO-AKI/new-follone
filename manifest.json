@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "follone for X",
-  "version": "0.4.6",
-  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。Prompt APIが無い環境でもMockで動作。",
+  "version": "0.4.7",
+  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。詳細ログ搭載。Prompt APIが無い環境でもMockで動作。",
   "permissions": [
     "storage"
   ],

@@ -110,6 +110,29 @@
       </div>
     </section>
 
+    
+    <section class="card">
+      <h2>デバッグ</h2>
+      <label class="row">
+        <span>ログを出す</span>
+        <input type="checkbox" id="debug">
+      </label>
+
+      <label>
+        <span>ログレベル</span>
+        <select id="logLevel">
+          <option value="debug">debug</option>
+          <option value="info">info</option>
+          <option value="warn">warn</option>
+          <option value="error">error</option>
+        </select>
+      </label>
+
+      <div class="muted" style="margin-top:8px;">
+        DevToolsのConsoleで「[follone]」で検索すると追跡しやすいです。
+      </div>
+    </section>
+
     <div class="footer">
       <button id="save">保存</button>
       <span id="status"></span>

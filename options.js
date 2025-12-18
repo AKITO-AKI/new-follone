@@ -14,7 +14,9 @@ const KEYMAP = {
   reportMinSeconds: "follone_reportMinSeconds",
   inactiveSuggestSeconds: "follone_inactiveSuggestSeconds",
   inactiveCooldownMs: "follone_inactiveCooldownMs",
-  topics: "follone_topics"
+  topics: "follone_topics",
+  debug: "follone_debug",
+  logLevel: "follone_logLevel"
 };
 
 function $(id){ return document.getElementById(id); }
@@ -41,6 +43,9 @@ async function load() {
   $("reportMinSeconds").value = cur[KEYMAP.reportMinSeconds] ?? 60;
   $("inactiveSuggestSeconds").value = cur[KEYMAP.inactiveSuggestSeconds] ?? 180;
   $("inactiveCooldownMs").value = cur[KEYMAP.inactiveCooldownMs] ?? (10 * 60 * 1000);
+
+  $("debug").checked = cur[KEYMAP.debug] ?? true;
+  $("logLevel").value = cur[KEYMAP.logLevel] ?? "info";
 
   const topics = cur[KEYMAP.topics];
   const fallback = [
@@ -71,6 +76,9 @@ async function save() {
   out[KEYMAP.reportMinSeconds] = Number($("reportMinSeconds").value || 60);
   out[KEYMAP.inactiveSuggestSeconds] = Number($("inactiveSuggestSeconds").value || 180);
   out[KEYMAP.inactiveCooldownMs] = Number($("inactiveCooldownMs").value || (10 * 60 * 1000));
+
+  out[KEYMAP.debug] = $("debug").checked;
+  out[KEYMAP.logLevel] = $("logLevel").value;
 
   const lines = $("topics").value.split("\n").map(s => s.trim()).filter(Boolean);
   out[KEYMAP.topics] = lines.slice(0, 30);
