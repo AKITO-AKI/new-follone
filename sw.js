@@ -213,6 +213,12 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
+    if (msg.type === "FOLLONE_GET_XP") {
+      const cur = await chrome.storage.local.get(["follone_xp"]);
+      sendResponse({ ok: true, xp: cur.follone_xp || 0 });
+      return;
+    }
+
     if (msg.type === "FOLLONE_ADD_XP") {
       const add = Number(msg.amount || 0);
       const cur = await chrome.storage.local.get(["follone_xp"]);

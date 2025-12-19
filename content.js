@@ -158,6 +158,11 @@
     lastBubbleTs: 0,
 
     sessionStartMs: Date.now(),
+    contextInvalidated: false,
+    xp: 0,
+    dashBias: 0,
+    dashTop: null,
+    dashQueries: [],
     riskCount: 0,
     topicCounts: new Map()
   };
@@ -201,6 +206,89 @@
     }
   }
 
+
+
+  // -----------------------------
+  // Extension context guards (prevents noisy "Extension context invalidated" crashes after reload/update)
+  // -----------------------------
+  function isContextInvalidated(err) {
+    const s = String(err && (err.message || err) || "");
+    return s.includes("Extension context invalidated") || s.includes("context invalidated");
+  }
+
+  
+  // ---------------------------------
+  // Extension context invalidation UX
+  // ---------------------------------
+  function showCtxBanner() {
+    try {
+      if (document.getElementById("follone-ctx-banner")) return;
+      const d = document.createElement("div");
+      d.id = "follone-ctx-banner";
+      d.innerHTML = `
+        <div class="ctxCard">
+          <div class="ctxTitle">follone が更新されたみたい</div>
+          <div class="ctxBody">ページを再読み込みすると再接続できるよ。</div>
+          <div class="ctxRow">
+            <button id="follone-ctx-reload">再読み込み</button>
+            <button id="follone-ctx-dismiss" class="ghost">閉じる</button>
+          </div>
+        </div>`;
+      document.documentElement.appendChild(d);
+      d.querySelector("#follone-ctx-reload")?.addEventListener("click", () => location.reload());
+      d.querySelector("#follone-ctx-dismiss")?.addEventListener("click", () => d.remove());
+    } catch (_) {}
+  }
+
+function onContextInvalidated(err) {
+    if (state.contextInvalidated) return;
+    state.contextInvalidated = true;
+    state.sessionStatus = "off";
+    log("warn", "[CTX]", "Extension context invalidated. Reload the page to reattach the extension.", String(err));
+    try { hideLoader(); } catch (_) {}
+    try { renderWidget(); } catch (_) {}
+    try { showCtxBanner(); } catch (_) {}
+  }
+
+  async function sendMessageSafe(msg) {
+    if (state.contextInvalidated) return null;
+    try {
+      return await chrome.runtime.sendMessage(msg);
+    } catch (e) {
+      if (isContextInvalidated(e)) {
+        onContextInvalidated(e);
+        return null;
+      }
+      throw e;
+    }
+  }
+
+  async function storageGetSafe(keys) {
+    if (state.contextInvalidated) return {};
+    try {
+      return await chrome.storage.local.get(keys);
+    } catch (e) {
+      if (isContextInvalidated(e)) {
+        onContextInvalidated(e);
+        return {};
+      }
+      throw e;
+    }
+  }
+
+  async function storageSetSafe(obj) {
+    if (state.contextInvalidated) return false;
+    try {
+      await chrome.storage.local.set(obj);
+      return true;
+    } catch (e) {
+      if (isContextInvalidated(e)) {
+        onContextInvalidated(e);
+        return false;
+      }
+      throw e;
+    }
+  }
 
   // -----------------------------
   // Persistent result cache (v0.4.11)
@@ -328,7 +416,7 @@
     if (cacheLoaded) return;
     cacheLoaded = true;
     try {
-      const obj = await chrome.storage.local.get([RESULT_CACHE_KEY_V2, RESULT_CACHE_KEY_V1]);
+      const obj = await storageGetSafe([RESULT_CACHE_KEY_V2, RESULT_CACHE_KEY_V1]);
       let saved = obj[RESULT_CACHE_KEY_V2];
 
       if (!saved || typeof saved !== "object") {
@@ -424,10 +512,10 @@
       try {
         const pc = ensurePersistentCache();
         if (!pc) return;
-        await chrome.storage.local.set({ [RESULT_CACHE_KEY_V2]: pc });
+        await storageSetSafe({ [RESULT_CACHE_KEY_V2]: pc });
         log("debug", "[CACHE]", "persisted", { ids: (pc?.ids?.order?.length||0), hashes: (pc?.hashes?.order?.length||0) });
       } catch (e) {
-        log("warn", "[CACHE]", "persist failed", String(e));
+        if (!isContextInvalidated(e)) log("warn", "[CACHE]", "persist failed", String(e));
       }
     }, Math.max(250, settings.cachePersistMs || 700));
   }
@@ -472,20 +560,97 @@
       .replaceAll('"', "&quot;")
       .replaceAll("'", "&#039;");
   }
-  function addXp(amount) {
-    chrome.runtime.sendMessage({ type: "FOLLONE_ADD_XP", amount: Number(amount) || 0 }, () => {});
+  
+  // ---------------------------------
+  // EXP (XP) helpers
+  // ---------------------------------
+  const XP_LEVELS = [0, 10, 25, 45, 70, 100, 140, 190, 250, 320, 400, 500, 620, 760, 920, 1100];
+
+  function xpToLevel(xp) {
+    const x = Math.max(0, Number(xp) || 0);
+    let lv = 1;
+    for (let i = 1; i < XP_LEVELS.length; i++) {
+      if (x >= XP_LEVELS[i]) lv = i + 1;
+      else break;
+    }
+    const prev = XP_LEVELS[Math.min(lv - 1, XP_LEVELS.length - 1)];
+    const next = XP_LEVELS[Math.min(lv, XP_LEVELS.length - 1)] ?? (prev + 200);
+    const prog = next > prev ? (x - prev) / (next - prev) : 1;
+    return { lv, prev, next, prog: Math.max(0, Math.min(1, prog)), xp: x };
   }
-  function openOptions() {
-    chrome.runtime.sendMessage({ type: "FOLLONE_OPEN_OPTIONS" }, (res) => {
-      if (chrome.runtime.lastError || !res || !res.ok) {
-        window.open(chrome.runtime.getURL("options.html"), "_blank", "noopener,noreferrer");
+
+  async function loadXp() {
+    try {
+      const resp = await sendMessageSafe({ type: "FOLLONE_GET_XP" });
+      if (!resp) { return false; }
+      if (resp && resp.ok) {
+        state.xp = Number(resp.xp || 0);
+      }
+    } catch (_) {}
+  }
+
+function addXp(amount) {
+    sendMessageSafe({ type: "FOLLONE_ADD_XP", amount: Number(amount) || 0 }).then((res) => {
+      if (res && res.ok) {
+        state.xp = Number(res.xp || state.xp || 0);
+        renderWidget();
       }
     });
+  }
+  async function openOptions() {
+    if (state.contextInvalidated) {
+      showCtxBanner();
+      return;
+    }
+    try {
+      const res = await sendMessageSafe({ type: "FOLLONE_OPEN_OPTIONS" });
+      if (state.contextInvalidated) {
+        showCtxBanner();
+        return;
+      }
+      if (!res || !res.ok) {
+        try {
+          const url = chrome.runtime.getURL("options.html");
+          window.open(url, "_blank", "noopener,noreferrer");
+        } catch (e) {
+          if (isContextInvalidated(e)) onContextInvalidated(e);
+        }
+      }
+    } catch (e) {
+      if (isContextInvalidated(e)) onContextInvalidated(e);
+    }
   }
   function openXSearch(q) {
     const url = `https://x.com/search?q=${encodeURIComponent(q)}&src=typed_query&f=top`;
     window.open(url, "_blank", "noopener,noreferrer");
+  
+  // ---------------------------------
+  // "Opposite" (good-content) search suggestions
+  // ---------------------------------
+  const OPPOSITE_POOLS = {
+    "誹謗中傷": ["やさしい言葉 例", "癒し 音楽", "猫 かわいい", "良いニュース", "心が落ち着く 呼吸法"],
+    "政治": ["科学 ニュース", "宇宙 写真", "歴史 文化", "絶景 旅行", "学び まとめ"],
+    "偏見": ["多様性 学び", "文化 交流", "インクルーシブデザイン", "人権 教育", "やさしい解説"],
+    "差別": ["共生 取り組み", "多様性 学び", "文化 交流", "優しさ エピソード", "インクルーシブデザイン"],
+    "詐欺": ["情報リテラシー", "フィッシング 見分け方", "セキュリティ 基礎", "安心できる買い物 コツ", "生活の豆知識"],
+    "成人向け": ["アート 写真", "映画 レビュー", "料理 レシピ", "散歩 風景", "猫 かわいい"],
+    "なし": ["猫 かわいい", "良いニュース", "音楽 おすすめ", "科学 ニュース", "絶景 旅行"]
+  };
+
+  function pickOppositeQueries(riskCategory, n=3) {
+    const cat = String(riskCategory || "なし");
+    const pool = OPPOSITE_POOLS[cat] || OPPOSITE_POOLS["なし"];
+    // deterministic-ish shuffle
+    const seed = Date.now() % 997;
+    const arr = pool.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = (seed + i * 17) % (i + 1);
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr.slice(0, Math.max(1, Math.min(5, n)));
   }
+
+}
   function lockScroll(lock) {
     const html = document.documentElement;
     const body = document.body;
@@ -511,7 +676,9 @@
     progress: 0,
     raf: 0,
     pageToken: 0,
-    firstDoneForToken: new Set()
+    timer: 0,
+    durationMs: 1200,
+    startTs: 0
   };
 
   function setLoaderBrand(text) {
@@ -526,45 +693,72 @@
     }
   }
 
+  function setLoaderSubtitle(text) {
+    const el = document.getElementById("follone-loader-sub");
+    if (!el) return;
+    el.textContent = String(text || "");
+  }
+
+  function setLoaderQuote(text) {
+    const el = document.getElementById("follone-loader-quote");
+    if (!el) return;
+    el.textContent = String(text || "");
+  }
+
+
+
   function showLoader(kind, metaLeft) {
     const el = document.getElementById("follone-loader");
     if (!el) return;
-    loader.kind = kind;
-    loader.progress = 0;
-    el.classList.add("show");
+
+    loader.kind = kind === "nav" ? "nav" : "boot";
     loader.shown = true;
-    lockScroll(true);
 
-    setLoaderBrand(kind === "boot" ? "Follone" : "Now analyzing");
-    const sub = document.getElementById("follone-loader-sub");
-    const quote = document.getElementById("follone-loader-quote");
-    const left = document.getElementById("follone-loader-meta-left");
-    const right = document.getElementById("follone-loader-meta-right");
-    if (sub) sub.textContent = (kind === "boot") ? "タイムラインを整えるよ。" : "ちょい待って。先に見とく。";
-    if (quote) quote.textContent = (kind === "boot") ? "…こんにちは、ふぉろねだよ～。君と一緒に、タイムライン見ちゃお～。" : "…大丈夫。待たせすぎないようにする。";
-    if (left) left.textContent = metaLeft || `mode:${settings.aiMode}`;
-    if (right) right.textContent = "0%";
-    setLoaderProgress(0);
+    // Time-based durations (ms)
+    loader.durationMs = loader.kind === "boot" ? 1600 : 1100;
+    loader.startTs = Date.now();
 
-    // pseudo-progress to visualize waiting
+    // Reset
     if (loader.raf) cancelAnimationFrame(loader.raf);
+    if (loader.timer) clearTimeout(loader.timer);
+    loader.timer = 0;
+
+    el.classList.add("show");
+    setLoaderBrand("Follone");
+    setLoaderSubtitle(loader.kind === "boot" ? "起動中" : "Now analyzing");
+    setLoaderQuote(loader.kind === "boot" ? "少しだけ…待ってて。" : "ちょい待ち。分析するね。");
+
+    const left = document.getElementById("follone-loader-meta-left");
+    if (left) left.textContent = metaLeft || (loader.kind === "boot" ? "startup" : "loading");
+
+    // Remaining-time bar (100% -> 0%)
+    setLoaderProgress(1);
+
     const tick = () => {
       if (!loader.shown) return;
-      // Ease to 85% while waiting
-      const target = 0.85;
-      loader.progress += (target - loader.progress) * 0.03;
-      setLoaderProgress(loader.progress);
+      const elapsed = Date.now() - loader.startTs;
+      const t = Math.max(0, Math.min(1, 1 - (elapsed / loader.durationMs)));
+      setLoaderProgress(t);
+
+      if (t <= 0) {
+        hideLoader();
+        return;
+      }
       loader.raf = requestAnimationFrame(tick);
     };
-    loader.raf = requestAnimationFrame(tick);
+
+    tick();
+    loader.timer = setTimeout(() => {
+      hideLoader();
+    }, loader.durationMs + 50);
   }
 
-  function setLoaderProgress(p01) {
+  function setLoaderProgress(rem) {
     const bar = document.getElementById("follone-loader-bar");
     const right = document.getElementById("follone-loader-meta-right");
-    const pct = Math.max(0, Math.min(100, Math.round(p01 * 100)));
+    const pct = Math.max(0, Math.min(100, Math.round(Number(rem || 0) * 100)));
     if (bar) bar.style.width = `${pct}%`;
-    if (right) right.textContent = `${pct}%`;
+    if (right) right.textContent = `残り${pct}%`;
   }
 
   function hideLoader() {
@@ -573,7 +767,9 @@
     if (!loader.shown) return;
     loader.shown = false;
     if (loader.raf) cancelAnimationFrame(loader.raf);
-    // snap to 100 then fade
+    if (loader.timer) clearTimeout(loader.timer);
+    loader.timer = 0;
+    // start at 100% remaining
     setLoaderProgress(1);
     setTimeout(() => {
       el.classList.remove("show");
@@ -581,12 +777,8 @@
     }, 260);
   }
 
-  function markFirstAnalysisDone() {
-    if (loader.firstDoneForToken.has(loader.pageToken)) return;
-    loader.firstDoneForToken.add(loader.pageToken);
-    log("info", "[LOADER]", "first analysis done -> hide", { token: loader.pageToken });
-    hideLoader();
-  }
+  /* v0.4.15: loader is time-based (no markFirstAnalysisDone) */
+
 
   function bumpPageToken() {
     loader.pageToken += 1;
@@ -641,7 +833,26 @@
             <button id="follone-options">設定</button>
             <button id="follone-diagnose">診断</button>
           </div>
+          
+          <div class="exp" id="follone-exp">
+            <div class="expRow">
+              <div id="follone-exp-label">EXP Lv 1</div>
+              <div id="follone-exp-next">0/10</div>
+            </div>
+            <div class="expBarWrap"><div class="expBar" id="follone-exp-bar"></div></div>
+          </div>
+
+          <div class="dash" id="follone-dash">
+            <div class="dashTitle">視野ダッシュボード</div>
+            <div class="dashRow"><span>偏り度</span><span id="follone-bubble-score">--</span></div>
+            <div class="dashBarWrap"><div class="dashBar" id="follone-bubble-bar"></div></div>
+            <div class="dashSmall" id="follone-bubble-top">top: --</div>
+            <div class="dashSmall" id="follone-bubble-suggest">おすすめ: --</div>
+            <div class="row"><button id="follone-bubble-search">検索で広げる</button></div>
+          </div>
+
           <div class="muted" id="follone-meta"></div>
+
         </div>
       </div>
     `;
@@ -721,19 +932,28 @@
       parts.push(`userActivation:${navigator.userActivation?.isActive ? "active" : "inactive"}`);
 
       try {
-        const b = await chrome.runtime.sendMessage({ type: "FOLLONE_BACKEND_STATUS" });
+        const b = await sendMessageSafe({ type: "FOLLONE_BACKEND_STATUS" });
         if (b && b.ok) {
           parts.push(`offscreen:${String(b.availability || "-")}/${String(b.status || "-")}`);
         } else {
           parts.push(`offscreen:na`);
         }
       } catch (e) {
+        if (isContextInvalidated(e)) onContextInvalidated(e);
         parts.push(`offscreen:err`);
       }
 
       parts.push(`backend:${state.sessionStatus}`);
       if (meta) meta.textContent = parts.join(" / ");
     });
+
+    // Dashboard action: widen perspective via X search
+    w.querySelector("#follone-bubble-search")?.addEventListener("click", () => {
+      const qs = state.dashQueries && state.dashQueries.length ? state.dashQueries : ["猫 かわいい"];
+      openXSearch(qs[0]);
+      addXp(1);
+    });
+
 
     renderWidget();
   }
@@ -753,14 +973,40 @@
     if (state.sessionStatus === "mock") backendLabel = "Mock";
     if (state.sessionStatus === "off") backendLabel = "OFF";
     if (state.sessionStatus === "unavailable") backendLabel = "利用不可";
+    if (state.sessionStatus === "downloadable") backendLabel = "DL待ち";
+    if (state.sessionStatus === "downloading") backendLabel = "DL中";
 
     let sub = `${enabled} / AI:${backendLabel} / mode:${settings.aiMode}`;
-    if (state.sessionStatus === "downloading") sub = `モデルDL中… ${enabled}`;
     setSub(sub);
 
     if (meta) {
       meta.textContent = `可視tweetのみ / batch:${settings.batchSize} / idle:${settings.idleMs}ms / session:${sec}s`;
     }
+
+    // EXP
+    const expLabel = document.getElementById("follone-exp-label");
+    const expNext = document.getElementById("follone-exp-next");
+    const expBar = document.getElementById("follone-exp-bar");
+    if (expLabel && expNext && expBar) {
+      const info = xpToLevel(state.xp || 0);
+      expLabel.textContent = `EXP Lv ${info.lv}`;
+      expNext.textContent = `${info.xp}/${info.next}`;
+      expBar.style.width = `${Math.round(info.prog * 100)}%`;
+    }
+
+    // Dashboard (filter-bubble)
+    const scoreEl = document.getElementById("follone-bubble-score");
+    const barEl = document.getElementById("follone-bubble-bar");
+    const topEl = document.getElementById("follone-bubble-top");
+    const sugEl = document.getElementById("follone-bubble-suggest");
+
+    const biasPct = Number(state.dashBias || 0);
+    const top = state.dashTop || "—";
+    const qs = Array.isArray(state.dashQueries) ? state.dashQueries : [];
+    if (scoreEl) scoreEl.textContent = `${biasPct}%`;
+    if (barEl) barEl.style.width = `${Math.max(0, Math.min(100, biasPct))}%`;
+    if (topEl) topEl.textContent = `top: ${top}`;
+    if (sugEl) sugEl.textContent = `おすすめ: ${qs.length ? qs.map(q => `「${q}」`).join("、") : "—"}`;
   }
 
   // -----------------------------
@@ -781,7 +1027,7 @@
 
     // auto: Ask SW/offscreen backend (extension origin) for status.
     try {
-      const resp = await chrome.runtime.sendMessage({ type: "FOLLONE_BACKEND_STATUS" });
+      const resp = await sendMessageSafe({ type: "FOLLONE_BACKEND_STATUS" });
       if (resp && resp.ok) {
         // Map backend states into UI states
         const a = String(resp.availability || "");
@@ -1073,12 +1319,15 @@
     // Try offscreen Prompt API backend first (extension origin).
     if (settings.aiMode === "auto") {
       try {
-        const resp = await chrome.runtime.sendMessage({
+        const resp = await sendMessageSafe({
           type: "FOLLONE_CLASSIFY_BATCH",
           batch,
           topicList: settings.topics,
           priority: priority || "low"
         });
+        if (!resp) {
+          throw new Error("Extension context invalidated");
+        }
         if (resp && resp.ok && Array.isArray(resp.results)) {
           state.sessionStatus = "ready";
           return resp.results;
@@ -1132,34 +1381,35 @@
     const hist = state.topicHistory;
     if (hist.length < settings.bubbleMinSamples) return;
 
+    // Count distribution
     const countsMap = new Map();
     for (const c of hist) countsMap.set(c, (countsMap.get(c) || 0) + 1);
 
     let topCat = null;
     let topN = 0;
     const counts = [];
+    let total = 0;
     for (const [k, v] of countsMap.entries()) {
+      total += v;
       counts.push(v);
       if (v > topN) { topN = v; topCat = k; }
     }
 
-    const dominance = topN / hist.length;
-    const ent = normalizedEntropy(counts, hist.length);
-    const trigger = (dominance >= settings.bubbleDominance) || (ent <= settings.bubbleEntropy);
-    if (!trigger) return;
+    const h = normalizedEntropy(counts, total);
+    const bias = Math.max(0, Math.min(1, 1 - h)); // 0=多様, 1=偏り強
+    const biasPct = Math.round(bias * 100);
+
+    // Pick queries that are "underrepresented" to widen the view
+    const qs = pickUnderrepresentedTopics(3);
+    if (!qs.length) qs.push("別の視点");
 
     state.lastBubbleTs = now;
-    log("info","[BUBBLE]","trigger", { topCat, dominance, entropy: ent, samples: hist.length });
+    state.dashBias = biasPct;
+    state.dashTop = topCat || "その他";
+    state.dashQueries = qs;
 
-    // If Prompt API is available, we could do nicer suggestions. If not, use underrepresented topics.
-    let suggestions = pickUnderrepresentedTopics(3);
-    if (state.sessionStatus === "ready" && state.session && settings.bubbleUseLLM) {
-      // Still keep costs low: do not call extra prompt unless user enables bubbleUseLLM.
-      suggestions = await suggestSearchesLLM(topCat || "最近の話題", suggestions);
-    }
-
-    showBubbleCard(topCat || "最近の話題", dominance, ent, suggestions.slice(0, 3));
-    addXp(2);
+    // Always-visible dashboard: just refresh UI
+    renderWidget();
   }
 
   async function suggestSearchesLLM(topCat, fallbackTopics) {
@@ -1253,7 +1503,7 @@
 
     badge.textContent = `${cat} / ${score}`;
 
-    const searches = Array.isArray(res.suggestedSearches) ? res.suggestedSearches.slice(0, 3) : [];
+        const searches = pickOppositeQueries(cat, 3);
     const searchLine = searches.length ? `検索候補: ${searches.map(s => `「${s}」`).join("、")}` : "検索候補:（なし）";
 
     text.innerHTML = `
@@ -1439,7 +1689,7 @@
       const results = await classifyBatch(batch, priority);
       log("info", "[CLASSIFY]", "results", results.map(x => ({ id: x.id, risk: x.riskScore, cat: x.riskCategory, topic: x.topicCategory })));
 
-      if (results.length) markFirstAnalysisDone();
+      if (results.length) /* time-based loader */
 
       for (const r of results) {
         if (!r || !r.id) continue;
@@ -1710,25 +1960,38 @@
   // Boot
   // -----------------------------
   (async () => {
+    ensureRuntimeMaps();
     await loadSettings();
     await loadResultCache();
     log("info","[SETTINGS]","loaded", { enabled: settings.enabled, aiMode: settings.aiMode, debug: settings.debug, logLevel: settings.logLevel, batchSize: settings.batchSize, idleMs: settings.idleMs });
     mountUI();
-    chrome.runtime.sendMessage({ type: "FOLLONE_PING" }, (res) => {
-      if (chrome.runtime.lastError) {
-        log("warn","[SW]","ping failed", chrome.runtime.lastError.message);
-      } else {
-        log("info","[SW]","ping", res);
-      }
-    });
-    // Startup loader to buy time for pre-analysis
-    if (!sessionStorage.getItem("follone_seenSplash")) {
-      sessionStorage.setItem("follone_seenSplash", "1");
-      bumpPageToken();
-      showLoader("boot", `mode:${settings.aiMode}`);
-    } else {
-      bumpPageToken();
+    await loadXp();
+    renderWidget();
+
+    // Auto-start Prompt API when possible (no extra button)
+    if (settings.enabled) {
+      scheduleDiscovery(0);
+      scheduleAnalyze(0);
     }
+
+    // If model needs activation, any user interaction will attempt to refresh backend state.
+    const once = () => {
+      window.removeEventListener("pointerdown", once, true);
+      window.removeEventListener("keydown", once, true);
+      ensureBackend(true).then(() => renderWidget()).catch(() => {});
+    };
+    window.addEventListener("pointerdown", once, true);
+    window.addEventListener("keydown", once, true);
+
+    try {
+      const res = await sendMessageSafe({ type: "FOLLONE_PING" });
+      if (res) log("info","[SW]","ping", res);
+    } catch (e) {
+      if (!isContextInvalidated(e)) log("warn","[SW]","ping failed", String(e));
+    }
+    // Startup loader (time-based, always)
+    bumpPageToken();
+    showLoader("boot", `mode:${settings.aiMode}`);
 
     startObservers();
 

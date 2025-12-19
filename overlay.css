@@ -196,3 +196,107 @@
   color: rgba(255,255,255,0.92);
   pointer-events: none;
 }
+
+
+/* Widget: EXP + dashboard */
+#follone-widget .exp {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.06);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+#follone-widget .expRow {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  opacity: 0.95;
+  margin-bottom: 8px;
+}
+#follone-widget .expBarWrap {
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.10);
+  overflow: hidden;
+}
+#follone-widget .expBar {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.85);
+}
+
+#follone-widget .dash {
+  margin-top: 10px;
+  padding: 10px;
+  border-radius: 12px;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid rgba(255,255,255,0.10);
+}
+#follone-widget .dashTitle {
+  font-size: 12px;
+  opacity: 0.95;
+  margin-bottom: 8px;
+}
+#follone-widget .dashRow {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  opacity: 0.92;
+}
+#follone-widget .dashBarWrap {
+  margin-top: 8px;
+  height: 8px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.10);
+  overflow: hidden;
+}
+#follone-widget .dashBar {
+  height: 100%;
+  width: 0%;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.70);
+}
+#follone-widget .dashSmall {
+  margin-top: 8px;
+  font-size: 11px;
+  opacity: 0.82;
+  line-height: 1.35;
+}
+#follone-widget #follone-bubble-search {
+  width: 100%;
+  margin-top: 10px;
+}
+
+
+/* Context invalidated banner */
+#follone-ctx-banner{
+  position: fixed;
+  left: 16px;
+  bottom: 16px;
+  z-index: 2147483647;
+  pointer-events: auto;
+}
+#follone-ctx-banner .ctxCard{
+  width: 280px;
+  border-radius: 14px;
+  padding: 12px;
+  background: rgba(20,20,20,0.92);
+  border: 1px solid rgba(255,255,255,0.14);
+  color: rgba(255,255,255,0.92);
+  box-shadow: 0 18px 60px rgba(0,0,0,0.35);
+}
+#follone-ctx-banner .ctxTitle{ font-size: 13px; font-weight: 600; margin-bottom: 6px; }
+#follone-ctx-banner .ctxBody{ font-size: 12px; opacity: 0.9; line-height: 1.4; margin-bottom: 10px; }
+#follone-ctx-banner .ctxRow{ display:flex; gap:8px; }
+#follone-ctx-banner button{
+  flex:1;
+  height: 32px;
+  border-radius: 10px;
+  border: 1px solid rgba(255,255,255,0.18);
+  background: rgba(255,255,255,0.10);
+  color: rgba(255,255,255,0.92);
+  cursor: pointer;
+}
+#follone-ctx-banner button.ghost{ background: rgba(255,255,255,0.04); }
