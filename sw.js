@@ -53,7 +53,6 @@ chrome.runtime.onInstalled.addListener(async (details) => {
 // Offscreen document broker (Prompt API host)
 // -----------------------------
 const OFFSCREEN_URL = "offscreen.html";
-const pending = new Map(); // requestId -> { sendResponse, timer }
 
 function makeId() {
   try {
@@ -129,6 +128,8 @@ async function forwardClassify(requestId, batch, topicList, priority) {
       type: "FOLLONE_OFFSCREEN_RESULT",
       requestId,
       ok: false,
+      engine: "none",
+      latencyMs: 0,
       status: "unavailable",
       availability: "no_offscreen",
       error: ensured.error,
@@ -149,30 +150,44 @@ async function forwardClassify(requestId, batch, topicList, priority) {
   });
 }
 
+
+async function classifyViaOffscreen(batch, topicList, priority) {
+  const ensured = await ensureOffscreen();
+  if (!ensured.ok) {
+    return { ok: false, backend: "offscreen", status: "unavailable", availability: "no_offscreen", engine: "none", latencyMs: 0, results: [], error: ensured.error };
+  }
+
+  const t0 = Date.now();
+  const resp = await sendMessageP({
+    target: "offscreen",
+    type: "FOLLONE_OFFSCREEN_CLASSIFY_DIRECT",
+    batch: Array.isArray(batch) ? batch : [],
+    topicList: Array.isArray(topicList) ? topicList : [],
+    priority: priority === "high" ? "high" : "low"
+  });
+  const dt = Date.now() - t0;
+
+  if (!resp || resp.ok === false) {
+    return { ok: false, backend: "offscreen", status: "unavailable", availability: "error", engine: "none", latencyMs: dt, results: [], error: resp?.error || "no_response" };
+  }
+
+  // Expect direct offscreen output: {ok,status,availability,engine,latencyMs,results}
+  const results = Array.isArray(resp.results) ? resp.results : [];
+  return {
+    ok: Boolean(resp.ok),
+    backend: "offscreen",
+    status: resp.status || (resp.ok ? "ready" : "unavailable"),
+    availability: resp.availability || "available",
+    engine: resp.engine || (resp.ok ? "prompt_api" : "none"),
+    latencyMs: Number(resp.latencyMs || dt),
+    results
+  };
+}
+
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
     if (!msg || typeof msg.type !== "string") {
       sendResponse({ ok: false });
-      return;
-    }
-
-    // Offscreen -> SW result relay
-    if (msg.target === "sw" && msg.type === "FOLLONE_OFFSCREEN_RESULT") {
-      const requestId = msg.requestId;
-      const p = pending.get(requestId);
-      if (p) {
-        clearTimeout(p.timer);
-        pending.delete(requestId);
-        p.sendResponse({
-          ok: Boolean(msg.ok),
-          status: msg.status,
-          availability: msg.availability,
-          results: Array.isArray(msg.results) ? msg.results : [],
-          error: msg.error
-        });
-      }
-      // No response expected for this message
-      sendResponse({ ok: true });
       return;
     }
 
@@ -196,20 +211,11 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     }
 
     if (msg.type === "FOLLONE_CLASSIFY_BATCH") {
-      const requestId = makeId();
       const batch = Array.isArray(msg.batch) ? msg.batch : [];
       const topicList = Array.isArray(msg.topicList) ? msg.topicList : [];
-
-      // Keep the message channel open.
-      const timer = setTimeout(() => {
-        const p = pending.get(requestId);
-        if (!p) return;
-        pending.delete(requestId);
-        p.sendResponse({ ok: false, status: "timeout", availability: "unknown", results: [], error: "timeout" });
-      }, 25000);
-
-      pending.set(requestId, { sendResponse, timer });
-      await forwardClassify(requestId, batch, topicList, msg.priority);
+      const priority = msg.priority || "low";
+      const resp = await classifyViaOffscreen(batch, topicList, priority);
+      sendResponse(resp);
       return;
     }
 

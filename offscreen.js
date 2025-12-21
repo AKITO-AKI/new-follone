@@ -168,28 +168,30 @@ async function classifyBatch(batch, topicList) {
   // batch: [{id,text,meta}]
   const ensure = await ensureSession();
   if (!ensure.ok) {
-    return { ok: false, status: ensure.status, availability: ensure.availability, results: [] };
+    return { ok: false, status: ensure.status, availability: ensure.availability, engine: "none", latencyMs: 0, results: [] };
   }
 
   const topics = sanitizeTopicList(topicList);
   const schema = buildSchema(topics);
   const prompt = buildClassifyPrompt(batch, topics);
 
+  const t0 = performance.now();
   const raw = await session.prompt(prompt, {
     responseConstraint: schema,
     omitResponseConstraintInput: true,
   });
+  const latencyMs = Math.round(performance.now() - t0);
 
   let parsed;
   try {
     parsed = JSON.parse(raw);
   } catch (e) {
     log("warn", "JSON parse failed, returning empty", String(e), raw?.slice?.(0, 200));
-    return { ok: false, status: "parse_error", availability: "available", results: [] };
+    return { ok: false, status: "parse_error", availability: "available", engine: "prompt_api", latencyMs: 0, results: [] };
   }
 
   const results = Array.isArray(parsed?.results) ? parsed.results : [];
-  return { ok: true, status: "ready", availability: "available", results };
+  return { ok: true, status: "ready", availability: "available", engine: "prompt_api", latencyMs, results };
 }
 
 chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
@@ -211,7 +213,30 @@ chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
       return;
     }
 
-    if (msg.type === "FOLLONE_OFFSCREEN_CLASSIFY") {
+    
+    // Direct classify (SW waits for this response; avoids SW pending-map loss)
+    if (msg.type === "FOLLONE_OFFSCREEN_CLASSIFY_DIRECT") {
+      const batch = Array.isArray(msg.batch) ? msg.batch : [];
+      const topicList = Array.isArray(msg.topicList) ? msg.topicList : [];
+      try {
+        const out = await classifyBatch(batch, topicList);
+        sendResponse({ ...out, backend: "offscreen" });
+      } catch (e) {
+        sendResponse({
+          ok: false,
+          backend: "offscreen",
+          engine: "none",
+          latencyMs: 0,
+          status: "unavailable",
+          availability: "error",
+          error: String(e),
+          results: []
+        });
+      }
+      return;
+    }
+
+if (msg.type === "FOLLONE_OFFSCREEN_CLASSIFY") {
       const { requestId, batch, topicList, priority } = msg;
       pushTask({ requestId, batch, topicList, priority: priority === "high" ? "high" : "low" });
       sendResponse({ ok: true }); // immediate ack

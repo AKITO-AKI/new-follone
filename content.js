@@ -213,7 +213,13 @@
   // -----------------------------
   function isContextInvalidated(err) {
     const s = String(err && (err.message || err) || "");
-    return s.includes("Extension context invalidated") || s.includes("context invalidated");
+    return (
+      s.includes("Extension context invalidated") ||
+      s.includes("context invalidated") ||
+      s.includes("message channel closed") ||
+      s.includes("The message port closed") ||
+      s.includes("A listener indicated an asynchronous response")
+    );
   }
 
   
@@ -222,21 +228,45 @@
   // ---------------------------------
   function showCtxBanner() {
     try {
-      if (document.getElementById("follone-ctx-banner")) return;
+      const existing = document.getElementById("follone-ctx-banner");
+      if (existing) return;
+
       const d = document.createElement("div");
       d.id = "follone-ctx-banner";
       d.innerHTML = `
         <div class="ctxCard">
           <div class="ctxTitle">follone が更新されたみたい</div>
-          <div class="ctxBody">ページを再読み込みすると再接続できるよ。</div>
+          <div class="ctxBody" id="follone-ctx-body">ページを再読み込みすると再接続できるよ。</div>
           <div class="ctxRow">
             <button id="follone-ctx-reload">再読み込み</button>
             <button id="follone-ctx-dismiss" class="ghost">閉じる</button>
           </div>
         </div>`;
       document.documentElement.appendChild(d);
-      d.querySelector("#follone-ctx-reload")?.addEventListener("click", () => location.reload());
-      d.querySelector("#follone-ctx-dismiss")?.addEventListener("click", () => d.remove());
+
+      let cancelled = false;
+      let n = 3;
+      const body = d.querySelector("#follone-ctx-body");
+      const tick = () => {
+        if (cancelled) return;
+        if (body) body.textContent = `再接続のため、${n}秒後に自動で再読み込みするよ。`;
+        if (n <= 0) {
+          try { location.reload(); } catch (_) {}
+          return;
+        }
+        n--;
+        setTimeout(tick, 1000);
+      };
+      setTimeout(tick, 0);
+
+      d.querySelector("#follone-ctx-reload")?.addEventListener("click", () => {
+        cancelled = true;
+        location.reload();
+      });
+      d.querySelector("#follone-ctx-dismiss")?.addEventListener("click", () => {
+        cancelled = true;
+        d.remove();
+      });
     } catch (_) {}
   }
 
@@ -620,7 +650,35 @@ function addXp(amount) {
       if (isContextInvalidated(e)) onContextInvalidated(e);
     }
   }
-  function openXSearch(q) {
+  
+  // ---------------------------------
+  // "Opposite" (good-content) search suggestions (global)
+  // ---------------------------------
+  const OPPOSITE_POOLS_GLOBAL = {
+    "誹謗中傷": ["やさしい言葉 例", "癒し 音楽", "猫 かわいい", "良いニュース", "心が落ち着く 呼吸法"],
+    "政治": ["科学 ニュース", "宇宙 写真", "歴史 文化", "絶景 旅行", "学び まとめ"],
+    "偏見": ["多様性 学び", "文化 交流", "インクルーシブデザイン", "人権 教育", "やさしい解説"],
+    "差別": ["共生 取り組み", "多様性 学び", "文化 交流", "優しさ エピソード", "インクルーシブデザイン"],
+    "詐欺": ["情報リテラシー", "フィッシング 見分け方", "セキュリティ 基礎", "安心できる買い物 コツ", "生活の豆知識"],
+    "成人向け": ["アート 写真", "映画 レビュー", "料理 レシピ", "散歩 風景", "猫 かわいい"],
+    "なし": ["猫 かわいい", "良いニュース", "音楽 おすすめ", "科学 ニュース", "絶景 旅行"],
+    "その他": ["猫 かわいい", "良いニュース", "音楽 おすすめ", "科学 ニュース", "絶景 旅行"],
+    "問題なし": ["猫 かわいい", "良いニュース", "音楽 おすすめ", "科学 ニュース", "絶景 旅行"]
+  };
+
+  function pickOppositeQueries(riskCategory, n = 3) {
+    const cat = String(riskCategory || "なし");
+    const pool = OPPOSITE_POOLS_GLOBAL[cat] || OPPOSITE_POOLS_GLOBAL["なし"];
+    const seed = Date.now() % 997;
+    const arr = pool.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = (seed + i * 17) % (i + 1);
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr.slice(0, Math.max(1, Math.min(5, n)));
+  }
+
+function openXSearch(q) {
     const url = `https://x.com/search?q=${encodeURIComponent(q)}&src=typed_query&f=top`;
     window.open(url, "_blank", "noopener,noreferrer");
   
@@ -1319,17 +1377,22 @@ function addXp(amount) {
     // Try offscreen Prompt API backend first (extension origin).
     if (settings.aiMode === "auto") {
       try {
+        const t0 = performance.now();
+        log("debug", "[AI]", "send->sw", { backend: "offscreen", n: batch.length, priority: priority || "low", chars: batch.reduce((acc, p) => acc + String(p?.text || "").length, 0) });
         const resp = await sendMessageSafe({
           type: "FOLLONE_CLASSIFY_BATCH",
           batch,
           topicList: settings.topics,
           priority: priority || "low"
         });
+        const dt = Math.round(performance.now() - t0);
         if (!resp) {
           throw new Error("Extension context invalidated");
         }
         if (resp && resp.ok && Array.isArray(resp.results)) {
           state.sessionStatus = "ready";
+          log("info", "[AI]", "recv", { backend: resp.backend || "offscreen", engine: resp.engine || "prompt_api", status: resp.status, availability: resp.availability, latencyMs: resp.latencyMs || dt, n: resp.results.length });
+
           return resp.results;
         }
         // If backend reports not-ready/unavailable, keep sessionStatus for UX, then fall back to mock.
