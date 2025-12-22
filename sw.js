@@ -1,269 +1,142 @@
-// follone service worker (MV3) v0.4.8
-const DEFAULTS = {
-  follone_enabled: true,
-  follone_aiMode: "auto", // auto | mock | off
-  follone_riskSoftThreshold: 60,
-  follone_riskHardThreshold: 75,
-  follone_batchSize: 3,
-  follone_idleMs: 650,
+'use strict';
 
-  // Filter-bubble
-  follone_topicWindow: 30,
-  follone_bubbleDominance: 0.62,
-  follone_bubbleEntropy: 0.55,
-  follone_bubbleCooldownMs: 10 * 60 * 1000,
-  follone_bubbleMinSamples: 16,
-  follone_bubbleUseLLM: true,
+// Service worker:
+// - ensures offscreen document exists
+// - forwards classify/status/warmup messages to offscreen
+// - manages XP storage
+// - opens options page
 
-  // Report
-  follone_reportMinSeconds: 60,
-  follone_inactiveSuggestSeconds: 180,
-  follone_inactiveCooldownMs: 10 * 60 * 1000,
+const OFFSCREEN_URL = chrome.runtime.getURL('offscreen.html');
+const OFFSCREEN_REASON = (chrome.offscreen?.Reason?.DOM_PARSER) ?? 'DOM_PARSER';
 
-  // Debug
-  follone_debug: true,
-  follone_logLevel: "info", // debug | info | warn | error
+let ensuringOffscreenPromise = null;
 
-  // Progress
-  follone_xp: 0
-};
-
-const PREFIX = "[follone:sw]";
-function log(level, ...args) {
-  const fn = console[level] || console.log;
-  fn.call(console, PREFIX, ...args);
-}
-
-chrome.runtime.onInstalled.addListener(async (details) => {
-  log("info", "onInstalled", details?.reason);
-  const cur = await chrome.storage.local.get(Object.keys(DEFAULTS));
-  const toSet = {};
-  for (const [k, v] of Object.entries(DEFAULTS)) {
-    if (cur[k] === undefined) toSet[k] = v;
-  }
-  if (Object.keys(toSet).length) {
-    await chrome.storage.local.set(toSet);
-    log("info", "defaults applied", Object.keys(toSet));
-  } else {
-    log("info", "defaults already present");
-  }
-});
-
-// -----------------------------
-// Offscreen document broker (Prompt API host)
-// -----------------------------
-const OFFSCREEN_URL = "offscreen.html";
-
-function makeId() {
+async function hasOffscreenDoc() {
   try {
-    return crypto.randomUUID();
-  } catch (_) {
-    return String(Date.now()) + "_" + Math.random().toString(16).slice(2);
-  }
-}
+    if (chrome.offscreen?.hasDocument) return await chrome.offscreen.hasDocument();
+  } catch (_) {}
 
-function sendMessageP(message) {
-  return new Promise((resolve) => {
-    chrome.runtime.sendMessage(message, (resp) => {
-      const err = chrome.runtime.lastError;
-      if (err) resolve({ ok: false, error: err.message });
-      else resolve(resp);
-    });
-  });
-}
-
-async function hasOffscreen() {
-  // Prefer runtime.getContexts when available.
+  // Fallback: runtime.getContexts (Chrome 121+)
   try {
-    if (chrome.runtime.getContexts) {
-      const contexts = await chrome.runtime.getContexts({
-        contextTypes: ["OFFSCREEN_DOCUMENT"],
-        documentUrls: [chrome.runtime.getURL(OFFSCREEN_URL)]
-      });
-      return Array.isArray(contexts) && contexts.length > 0;
+    if (chrome.runtime?.getContexts) {
+      const ctxs = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+      return Array.isArray(ctxs) && ctxs.length > 0;
     }
   } catch (_) {}
 
-  // Fallback: best-effort — assume absent and try createDocument.
   return false;
 }
 
 async function ensureOffscreen() {
-  if (!chrome.offscreen || !chrome.offscreen.createDocument) {
-    return { ok: false, error: "offscreen API not available" };
-  }
-  const exists = await hasOffscreen();
-  if (exists) return { ok: true };
+  if (!chrome.offscreen?.createDocument) return { ok: false, error: 'offscreen_api_unavailable' };
+  if (ensuringOffscreenPromise) return ensuringOffscreenPromise;
 
-  try {
-    await chrome.offscreen.createDocument({
-      url: OFFSCREEN_URL,
-      reasons: ["DOM_PARSER"],
-      justification: "Run built-in Prompt API in extension origin (document context) for timeline classification."
-    });
-  } catch (e) {
-    // If it already exists (older Chrome without getContexts), treat as success.
-    const msg = String(e?.message || e);
-    if (!msg.includes("Only one offscreen") && !msg.includes("already")) {
-      return { ok: false, error: msg };
+  ensuringOffscreenPromise = (async () => {
+    const exists = await hasOffscreenDoc();
+    if (!exists) {
+      await chrome.offscreen.createDocument({
+        url: OFFSCREEN_URL,
+        reasons: [OFFSCREEN_REASON],
+        justification: 'Run Prompt API (LanguageModel) and JSON parsing.'
+      });
     }
-  }
-  return { ok: true };
-}
-
-async function getBackendStatus() {
-  const ensured = await ensureOffscreen();
-  if (!ensured.ok) return { ok: false, status: "unavailable", availability: "no_offscreen", error: ensured.error };
-
-  const resp = await sendMessageP({ target: "offscreen", type: "FOLLONE_OFFSCREEN_STATUS" });
-  if (!resp || !resp.ok) return { ok: false, status: "unavailable", availability: "error", error: resp?.error || "no_response" };
-  return resp;
-}
-
-async function forwardClassify(requestId, batch, topicList, priority) {
-  const ensured = await ensureOffscreen();
-  if (!ensured.ok) {
-    chrome.runtime.sendMessage({
-      target: "sw",
-      type: "FOLLONE_OFFSCREEN_RESULT",
-      requestId,
-      ok: false,
-      engine: "none",
-      latencyMs: 0,
-      status: "unavailable",
-      availability: "no_offscreen",
-      error: ensured.error,
-      results: []
-    });
-    return;
-  }
-
-  // Fire-and-forget; offscreen posts result back to SW via runtime message.
-  chrome.runtime.sendMessage({
-    target: "offscreen",
-    type: "FOLLONE_OFFSCREEN_CLASSIFY",
-    requestId,
-    batch,
-    topicList
-  }, () => {
-    // ignore ack; lastError here is not actionable; timeout will cover it.
+    return { ok: true };
+  })().finally(() => {
+    ensuringOffscreenPromise = null;
   });
+
+  return ensuringOffscreenPromise;
 }
 
+const XP_KEY = 'follone_xp';
 
-async function classifyViaOffscreen(batch, topicList, priority) {
+async function getXP() {
+  const obj = await chrome.storage.local.get(XP_KEY);
+  return Number(obj[XP_KEY] || 0);
+}
+
+async function addXP(delta) {
+  const cur = await getXP();
+  const next = Math.max(0, cur + Number(delta || 0));
+  await chrome.storage.local.set({ [XP_KEY]: next });
+  return next;
+}
+
+async function forwardToOffscreen(payload) {
   const ensured = await ensureOffscreen();
-  if (!ensured.ok) {
-    return { ok: false, backend: "offscreen", status: "unavailable", availability: "no_offscreen", engine: "none", latencyMs: 0, results: [], error: ensured.error };
-  }
+  if (!ensured.ok) return ensured;
 
-  const t0 = Date.now();
-  const resp = await sendMessageP({
-    target: "offscreen",
-    type: "FOLLONE_OFFSCREEN_CLASSIFY_DIRECT",
-    batch: Array.isArray(batch) ? batch : [],
-    topicList: Array.isArray(topicList) ? topicList : [],
-    priority: priority === "high" ? "high" : "low"
-  });
-  const dt = Date.now() - t0;
-
-  if (!resp || resp.ok === false) {
-    return { ok: false, backend: "offscreen", status: "unavailable", availability: "error", engine: "none", latencyMs: dt, results: [], error: resp?.error || "no_response" };
-  }
-
-  // Expect direct offscreen output: {ok,status,availability,engine,latencyMs,results}
-  const results = Array.isArray(resp.results) ? resp.results : [];
-  return {
-    ok: Boolean(resp.ok),
-    backend: "offscreen",
-    status: resp.status || (resp.ok ? "ready" : "unavailable"),
-    availability: resp.availability || "available",
-    engine: resp.engine || (resp.ok ? "prompt_api" : "none"),
-    latencyMs: Number(resp.latencyMs || dt),
-    results
-  };
+  // Offscreen listens for messages with {to:'offscreen'}.
+  return await chrome.runtime.sendMessage({ ...payload, to: 'offscreen' });
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
+  // Messages explicitly addressed to offscreen should be handled by the offscreen document,
+  // not by the service worker. Returning false keeps the response channel free.
+  if (msg && typeof msg === 'object' && msg.to === 'offscreen') {
+    return false;
+  }
+
   (async () => {
-    if (!msg || typeof msg.type !== "string") {
-      sendResponse({ ok: false });
-      return;
-    }
+    if (!msg || typeof msg !== 'object') return;
 
-    if (msg.type === "FOLLONE_PING") {
-      sendResponse({ ok: true, sw: "ok", sender: sender?.url || "" });
-      return;
-    }
+    switch (msg.type) {
+      case 'FOLLONE_PING':
+        sendResponse({ ok: true, where: 'sw', ts: Date.now() });
+        return;
 
-    
-    if (msg.type === "FOLLONE_BACKEND_WARMUP") {
-      const ensured = await ensureOffscreen();
-      if (!ensured.ok) {
-        sendResponse({ ok: false, status: "unavailable", availability: "no_offscreen", error: ensured.error });
+      case 'FOLLONE_GET_XP': {
+        const xp = await getXP();
+        sendResponse({ ok: true, xp });
         return;
       }
-      const resp = await sendMessageP({ target: "offscreen", type: "FOLLONE_OFFSCREEN_WARMUP" });
-      if (!resp || !resp.ok) {
-        sendResponse({ ok: false, status: resp?.status || "unavailable", availability: resp?.availability || "error", error: resp?.error || "no_response" });
+
+      case 'FOLLONE_ADD_XP': {
+        // Backward/forward compatibility: some content scripts send {amount}, others send {delta}.
+        const delta = (typeof msg.delta === 'number') ? msg.delta : msg.amount;
+        const xp = await addXP(delta);
+        sendResponse({ ok: true, xp });
         return;
       }
-      sendResponse({ ok: true, status: resp.status || "ready", availability: resp.availability || "available", hasSession: Boolean(resp.hasSession) });
-      return;
-    }
 
-if (msg.type === "FOLLONE_BACKEND_STATUS") {
-      const s = await getBackendStatus();
-      // Normalize shape expected by content.js
-      sendResponse({
-        ok: Boolean(s.ok),
-        status: s.status || "unavailable",
-        availability: s.availability || "unavailable",
-        hasSession: Boolean(s.hasSession),
-        sessionAgeSec: s.sessionAgeSec || 0,
-        error: s.error
-      });
-      return;
-    }
-
-    if (msg.type === "FOLLONE_CLASSIFY_BATCH") {
-      const batch = Array.isArray(msg.batch) ? msg.batch : [];
-      const topicList = Array.isArray(msg.topicList) ? msg.topicList : [];
-      const priority = msg.priority || "low";
-      const resp = await classifyViaOffscreen(batch, topicList, priority);
-      sendResponse(resp);
-      return;
-    }
-
-    if (msg.type === "FOLLONE_GET_XP") {
-      const cur = await chrome.storage.local.get(["follone_xp"]);
-      sendResponse({ ok: true, xp: cur.follone_xp || 0 });
-      return;
-    }
-
-    if (msg.type === "FOLLONE_ADD_XP") {
-      const add = Number(msg.amount || 0);
-      const cur = await chrome.storage.local.get(["follone_xp"]);
-      const next = Math.max(0, (cur.follone_xp || 0) + add);
-      await chrome.storage.local.set({ follone_xp: next });
-      sendResponse({ ok: true, xp: next });
-      return;
-    }
-
-    if (msg.type === "FOLLONE_OPEN_OPTIONS") {
-      try {
-        await chrome.runtime.openOptionsPage();
-        sendResponse({ ok: true });
-      } catch (e) {
-        sendResponse({ ok: false, error: String(e) });
+      case 'FOLLONE_OPEN_OPTIONS': {
+        try {
+          if (chrome.runtime.openOptionsPage) {
+            chrome.runtime.openOptionsPage();
+            sendResponse({ ok: true });
+          } else {
+            const url = chrome.runtime.getURL('options.html');
+            await chrome.tabs.create({ url });
+            sendResponse({ ok: true });
+          }
+        } catch (e) {
+          sendResponse({ ok: false, error: String(e) });
+        }
+        return;
       }
-      return;
-    }
 
-    sendResponse({ ok: false });
+      case 'FOLLONE_BACKEND_STATUS':
+      case 'FOLLONE_BACKEND_WARMUP':
+      case 'FOLLONE_CLASSIFY_BATCH': {
+        const t0 = Date.now();
+        const resp = await forwardToOffscreen(msg);
+        const t1 = Date.now();
+        if (resp && typeof resp === 'object') resp.latencyMs = t1 - t0;
+        sendResponse(resp);
+        return;
+      }
+
+      default:
+        sendResponse({ ok: false, error: 'unknown_message_type', type: msg.type });
+        return;
+    }
   })().catch((e) => {
-    log("error", "message handler error", String(e));
     try { sendResponse({ ok: false, error: String(e) }); } catch (_) {}
   });
-  return true;
+
+  return true; // async
 });
+
+// Best-effort: create offscreen when the extension starts.
+chrome.runtime.onStartup?.addListener(() => { ensureOffscreen().catch(() => {}); });
+chrome.runtime.onInstalled?.addListener(() => { ensureOffscreen().catch(() => {}); });

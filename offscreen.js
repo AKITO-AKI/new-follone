@@ -1,347 +1,337 @@
-// follone offscreen document (MV3) v0.4.8
-// Purpose: Run Prompt API (LanguageModel) in an extension-owned document context,
-//          so it isn't gated by x.com's Permissions-Policy / origin restrictions.
+// follone offscreen document (Prompt API / LanguageModel)
+// Handles Prompt API calls in a DOM-capable extension context.
 
-const LOG_PREFIX = "[follone:offscreen]";
+'use strict';
 
-function log(level, ...args) {
-  const fn = console[level] || console.log;
-  fn.call(console, LOG_PREFIX, ...args);
-}
+const VERSION = '0.4.35-a';
+
+const RISK_ENUM = [
+  'ok',
+  'light',
+  'medium',
+  'high',
+  'critical',
+  'violent',
+  'sexual',
+  'hate',
+  'scam'
+];
 
 const LM_OPTIONS = {
-  expectedInputs: [{ type: "text", languages: ["ja", "en"] }],
-  expectedOutputs: [{ type: "text", languages: ["ja"] }],
+  // Model behavior
+  temperature: 0.2,
+  topK: 40,
+
+  // IMPORTANT: specify expected input/output languages to avoid Chrome's LanguageModel
+  // "No output language was specified" warning and to improve stability.
+  expectedInputs: [
+    { type: "text", languages: ["ja", "en"] }
+  ],
+  expectedOutputs: [
+    { type: "text", languages: ["ja"] }
+  ],
 };
 
+let session = null;
+let lastAvailability = 'unknown';
+let lastError = null;
+// The built-in Prompt API session does not guarantee safe concurrent prompt() calls.
+// Serialize all prompts to avoid sporadic UnknownError / generic failures.
+let promptQueue = Promise.resolve();
 
-// Priority task queues (v0.4.9)
-// - Because we now "pre-analyze" a lot of posts, we must prioritize near-viewport tasks.
-// - We process tasks sequentially to keep model latency predictable.
-const highQ = [];
-const lowQ = [];
-let busy = false;
+function now() { return Date.now(); }
 
-function pushTask(task) {
-  const p = task?.priority === "high" ? highQ : lowQ;
-  p.push(task);
-  log("debug", "enqueue", { priority: task?.priority || "low", high: highQ.length, low: lowQ.length });
-  pump();
-}
-
-async function pump() {
-  if (busy) return;
-  const task = highQ.shift() || lowQ.shift();
-  if (!task) return;
-  busy = true;
+async function availability() {
   try {
-    const { requestId, batch, topicList } = task;
-    const out = await classifyBatch(Array.isArray(batch) ? batch : [], topicList);
-    chrome.runtime.sendMessage({
-      target: "sw",
-      type: "FOLLONE_OFFSCREEN_RESULT",
-      requestId,
-      ...out,
-    });
+    if (typeof LanguageModel === 'undefined' || !LanguageModel?.availability) {
+      lastAvailability = 'unavailable';
+      return lastAvailability;
+    }
+    lastAvailability = await LanguageModel.availability(LM_OPTIONS);
+    return lastAvailability;
   } catch (e) {
-    chrome.runtime.sendMessage({
-      target: "sw",
-      type: "FOLLONE_OFFSCREEN_RESULT",
-      requestId: task?.requestId,
-      ok: false,
-      status: "error",
-      availability: "unknown",
-      error: String(e),
-      results: []
-    });
-  } finally {
-    busy = false;
-    // Continue
-    setTimeout(pump, 0);
+    lastError = String(e);
+    lastAvailability = 'unavailable';
+    return lastAvailability;
   }
 }
-
-const RISK_ENUM = ["誹謗中傷", "政治", "偏見", "差別", "詐欺", "成人向け", "その他", "問題なし"];
-
-
-const REASON_ENUM = ["攻撃的な言い回し", "個人への非難", "煽り/扇動", "属性の一般化", "差別的表現", "政治的煽動", "誤情報の可能性", "金銭/誘導", "詐欺の可能性", "性的示唆", "露骨な表現", "スパム/宣伝", "過度な断定", "低情報量", "画像のみ", "絵文字のみ"];
-
-let session = null;
-let sessionStatus = "not_ready"; // not_ready | ready | unavailable | downloading | downloadable | mock
-let sessionCreatedAt = 0;
 
 async function ensureSession() {
-  if (typeof LanguageModel === "undefined") {
-    sessionStatus = "mock";
-    return { ok: false, status: "mock", availability: "no_api" };
-  }
+  const avail = await availability();
 
-  const availability = await LanguageModel.availability(LM_OPTIONS);
-  // We *cannot* guarantee user activation in an offscreen document.
-  // So: if model is not already "available", report status so UI can guide user.
-  if (availability === "unavailable") {
-    sessionStatus = "unavailable";
+  if (avail !== 'available') {
     session = null;
-    return { ok: false, status: "unavailable", availability };
+    return { ok: false, availability: avail, status: avail, error: lastError };
   }
-  if (availability === "downloadable" || availability === "downloading") {
-    sessionStatus = availability; // downloadable / downloading
+
+  if (session) return { ok: true, availability: avail, status: 'ready' };
+
+  try {
+    session = await LanguageModel.create(LM_OPTIONS);
+    return { ok: true, availability: avail, status: 'ready' };
+  } catch (e) {
     session = null;
-    return { ok: false, status: availability, availability };
+    lastError = String(e);
+    return { ok: false, availability: avail, status: 'create_failed', error: lastError };
   }
-
-  // availability === "available"
-  if (session) {
-    sessionStatus = "ready";
-    return { ok: true, status: "ready", availability };
-  }
-
-  session = await LanguageModel.create({
-    ...LM_OPTIONS,
-    outputLanguage: "ja",
-    // No monitor here; offscreen should be quiet.
-  });
-  sessionCreatedAt = Date.now();
-  sessionStatus = "ready";
-  return { ok: true, status: "ready", availability };
-}
-
-
-
-
-function sanitizeTopicList(topicList) {
-  // Accept: array of strings; return a safe, deduped list for schema enum usage.
-  // Keep it short to reduce prompt + schema size.
-  const MAX_TOPICS = 24;       // hard cap (speed)
-  const MAX_LEN = 18;          // per-topic char cap
-  const FALLBACK = ["その他"];
-
-  if (!Array.isArray(topicList)) return FALLBACK;
-
-  const out = [];
-  const seen = new Set();
-  for (const raw of topicList) {
-    if (raw == null) continue;
-    let s = String(raw).trim();
-    if (!s) continue;
-    // strip control chars
-    s = s.replace(/[\u0000-\u001F\u007F]/g, "");
-    if (!s) continue;
-    if (s.length > MAX_LEN) s = s.slice(0, MAX_LEN);
-    if (seen.has(s)) continue;
-    seen.add(s);
-    out.push(s);
-    if (out.length >= MAX_TOPICS) break;
-  }
-  return out.length ? out : FALLBACK;
-}
-
-
-function clampInt(v, min, max) {
-  const n = Number.parseInt(v, 10);
-  if (!Number.isFinite(n)) return min;
-  return Math.max(min, Math.min(max, n));
-}
-
-
-const LOW_INFO_REASONS = new Set(["低情報量", "画像のみ", "絵文字のみ"]);
-
-function inferRiskCategoryFromReasons(reasons) {
-  if (!Array.isArray(reasons)) return null;
-  const has = (x) => reasons.includes(x);
-  if (has("露骨な表現") || has("性的示唆")) return "成人向け";
-  if (has("政治的煽動")) return "政治";
-  if (has("差別的表現")) return "差別";
-  if (has("属性の一般化")) return "偏見";
-  if (has("スパム/宣伝")) return "詐欺";
-  if (has("攻撃的な言い回し") || has("個人への非難") || has("煽り/扇動") || has("過度な断定")) return "誹謗中傷";
-  return null;
-}
-
-function normalizeOneResult(r, topicList) {
-  if (!r || typeof r !== "object") return null;
-  const id = String(r.id ?? "").trim();
-  if (!id) return null;
-
-  let riskScore = clampInt(r.riskScore ?? r.risk ?? 0, 0, 100);
-  let riskCategory = RISK_ENUM.includes(r.riskCategory) ? r.riskCategory : "その他";
-  let topicCategory = topicList.includes(r.topicCategory) ? r.topicCategory : (topicList[0] || "その他");
-
-  let reasons = Array.isArray(r.reasons) ? r.reasons.filter(x => REASON_ENUM.includes(x)).slice(0, 2) : [];
-  if (reasons.length === 0) reasons = REASON_ENUM.includes("低情報量") ? ["低情報量"] : [];
-
-  // Coherence / sanity rules (favor speed + stable UI):
-  // - Low-info posts => always "問題なし" with low score
-  // - If model outputs "問題なし" but score/reasons indicate risk => promote category (do NOT clamp score down)
-  // - If category is vague but reasons indicate a specific risk => infer category from reasons
-  const lowInfoOnly = reasons.length > 0 && reasons.every(r => LOW_INFO_REASONS.has(r));
-
-  const inferred = inferRiskCategoryFromReasons(reasons);
-
-  if (lowInfoOnly) {
-    riskCategory = "問題なし";
-    riskScore = Math.min(riskScore, 10);
-  } else {
-    // Promote category when inconsistent
-    if (riskCategory === "問題なし") {
-      if (inferred) {
-        log("warn", "sanity: safe category but non-low-info reasons -> promoted", { id, riskScore, riskCategory, to: inferred, reasons });
-        riskCategory = inferred;
-      } else {
-        if (riskScore >= 20) {
-          log("warn", "sanity: safe category but score>=20 -> promoted to その他", { id, riskScore, reasons });
-          riskCategory = "その他";
-        }
-      }
-    } else if (riskCategory === "その他" && inferred) {
-      riskCategory = inferred;
-    }
-
-    // Keep a minimal floor for non-safe categories if the model under-scores
-    if (riskCategory !== "問題なし" && riskScore < 15) riskScore = 20;
-  }
-
-return { id, riskScore, riskCategory, topicCategory, reasons };
 }
 
 function buildSchema(topicList) {
+  const topicEnum = Array.isArray(topicList) && topicList.length
+    ? topicList.slice(0, 80)
+    : ['general'];
+
   return {
-    type: "object",
+    type: 'object',
+    additionalProperties: false,
     properties: {
       results: {
-        type: "array",
-        maxItems: 20,
+        type: 'array',
+        minItems: 1,
         items: {
-          type: "object",
-          properties: {
-            id: { type: "string" },
-            riskScore: { type: "integer", minimum: 0, maximum: 100 },
-            riskCategory: { type: "string", enum: RISK_ENUM },
-            topicCategory: { type: "string", enum: topicList },
-            reasons: { type: "array", maxItems: 2, items: { type: "string", enum: REASON_ENUM } },
-          },
-          required: ["id", "riskScore", "riskCategory", "topicCategory", "reasons"],
+          type: 'object',
           additionalProperties: false,
-        },
-      },
+          properties: {
+            id: { type: 'string' },
+            riskScore: { type: 'number', minimum: 0, maximum: 1 },
+            riskCategory: { type: 'string', enum: RISK_ENUM },
+            topicCategory: { type: 'string', enum: topicEnum },
+            reasons: {
+              type: 'array',
+              maxItems: 3,
+              items: { type: 'string' }
+            }
+          },
+          required: ['id', 'riskScore', 'riskCategory', 'topicCategory', 'reasons']
+        }
+      }
     },
-    required: ["results"],
-    additionalProperties: false,
+    required: ['results']
   };
 }
 
-function buildClassifyPrompt(batch, topicList) {
-  const persona = "あなたは「ふぉろね（follone）」です。少し気怠そうだがユーザーには優しく、介入時は説明重視。";
-  const rules = [
-    "次のX投稿（複数）について「危険カテゴリ」「危険度」「トピックカテゴリ」を判定し、理由タグ（最大2つ）を選ぶ。",
-    `危険カテゴリ: ${RISK_ENUM.join(" / ")}`,
-    "危険度: 0〜100（高いほど危険）",
-    "整合性: 「問題なし」は低情報量（低情報量/画像のみ/絵文字のみ）のときのみ。問題なしの場合riskScoreは0〜10。riskScoreが20以上ならriskCategoryは必ず「問題なし」以外。",
-    "reasonsは必ず1〜2個。自由記述は禁止。問題なしの場合は「低情報量/画像のみ/絵文字のみ」などから選ぶ。",
-    `トピックカテゴリ: ${topicList.join(" / ")}`,
-    `理由タグ: ${REASON_ENUM.join(" / ")}（この中から最大2つ。自由記述は禁止）`,
-    "制約: 出力はJSONのみ（responseConstraintに合致）。余計な文は出さない。",
-    "注意: 差別語/露骨な性的表現/誹謗中傷の文言は再掲しない。タグで表現する。"
-  ].join("\\n");
+function safeJsonParse(txt) {
+  try {
+    return JSON.parse(txt);
+  } catch (_) {
+    // Try to extract a JSON object substring.
+    const s = String(txt || '');
+    const start = s.indexOf('{');
+    const end = s.lastIndexOf('}');
+    if (start >= 0 && end > start) {
+      try { return JSON.parse(s.slice(start, end + 1)); } catch (_) {}
+    }
+    return null;
+  }
+}
 
-  const payload = batch.map(p => `ID:${p.id}\\nTEXT:${p.text}\\nMETA:${p.meta}`).join("\\n\\n---\\n\\n");
-  return `${persona}\\n${rules}\\n\\n${payload}`;
+function buildPrompt(batch, topicList) {
+  const topicEnum = Array.isArray(topicList) && topicList.length
+    ? topicList.slice(0, 80)
+    : ['general'];
+
+  // Keep per-item content short and safe.
+  const items = batch.map((x) => ({
+    id: String(x.id || ''),
+    text: String(x.text || '').slice(0, 800)
+  }));
+
+  return [
+    'You are a safety-focused classifier for short social media posts.',
+    '',
+    'Task:',
+    '- For each item, output: riskScore (0..1), riskCategory, topicCategory, reasons (0..3).',
+    '- riskCategory is one of: ' + RISK_ENUM.join(', '),
+    '- topicCategory must be one of: ' + topicEnum.join(', '),
+    '',
+    'Guidance:',
+    '- ok: benign / normal discussion.',
+    '- light: mild negativity, sarcasm, mild harassment, mild misinformation.',
+    '- medium: explicit slurs? threats? targeted harassment? self-harm mention? (keep non-graphic).',
+    '- high/critical: credible threats, explicit violence intent, doxxing, severe hate, explicit scam instructions.',
+    '- hate: hateful content against protected groups.',
+    '- scam: phishing, fraud, impersonation, suspicious links, investment scams.',
+    '- violent: encouragement or details of violence.',
+    '- sexual: explicit sexual content.',
+    '',
+    'Output JSON only.',
+    '',
+    'Input:',
+    JSON.stringify({ items }, null, 2)
+  ].join('\n');
+}
+
+function serializePrompt(fn) {
+  const run = promptQueue.then(fn, fn);
+  // Keep the queue alive even if a prompt fails.
+  promptQueue = run.catch(() => {});
+  return run;
+}
+
+function isProbablyTransientPromptError(err) {
+  const msg = String(err?.message || err || '');
+  const name = String(err?.name || '');
+  // Chrome surfaces a lot of Prompt API failures as "UnknownError" / "Other generic failures".
+  return (
+    name.includes('UnknownError') ||
+    msg.includes('UnknownError') ||
+    msg.includes('generic failures') ||
+    msg.includes('Other generic failures') ||
+    msg.includes('aborted') ||
+    msg.includes('Abort')
+  );
+}
+
+async function promptWithFallback(prompt, schema) {
+  let recreated = false;
+  if (!session) throw new Error('No Prompt API session');
+
+  // Per Chrome docs, responseConstraint should be the JSON schema object directly.
+  // (Some early prototypes used wrappers; we support a small compatibility fallback below.)
+  const variants = [
+    { responseConstraint: schema, omitResponseConstraintInput: true },
+    { responseConstraint: schema },
+    // Last-resort: no schema constraint. We still request JSON-only output in the prompt.
+    {},
+  ];
+
+  let last = null;
+  for (const opts of variants) {
+    try {
+      return await session.prompt(prompt, opts);
+    } catch (e) {
+      last = e;
+      lastError = String(e && (e.message || e) || e);
+
+      // If the session became invalid or Chrome reports a generic failure,
+      // recreate the session once and retry the same variant.
+      if (!recreated && isGenericLMFailure(e)) {
+        recreated = true;
+        session = null;
+        const res = await ensureSession();
+        if (res && res.ok && session) {
+          try {
+            return await session.prompt(prompt, opts);
+          } catch (e2) {
+            last = e2;
+            lastError = String(e2 && (e2.message || e2) || e2);
+          }
+        }
+      }
+    }
+  }
+  throw last || new Error('Prompt failed');
 }
 
 async function classifyBatch(batch, topicList) {
-  // batch: [{id,text,meta}]
-  const ensure = await ensureSession();
-  if (!ensure.ok) {
-    return { ok: false, status: ensure.status, availability: ensure.availability, engine: "none", latencyMs: 0, results: [] };
-  }
+  const ses = await ensureSession();
+  if (!ses.ok) return { ok: false, ...ses };
 
-  const topics = sanitizeTopicList(topicList);
-  const schema = buildSchema(topics);
-  const prompt = buildClassifyPrompt(batch, topics);
+  const schema = buildSchema(topicList);
+  const prompt = buildPrompt(batch, topicList);
 
-  const t0 = performance.now();
-  const raw = await session.prompt(prompt, {
-    responseConstraint: schema,
-    omitResponseConstraintInput: true,
+  // Serialize prompts to avoid concurrency issues, and auto-recover from transient failures.
+  return serializePrompt(async () => {
+    try {
+      const t0 = now();
+      const raw = await promptWithFallback(prompt, schema);
+      const t1 = now();
+      const obj = safeJsonParse(raw);
+
+      if (!obj || !Array.isArray(obj.results)) {
+        lastError = 'invalid_json';
+        return {
+          ok: false,
+          availability: lastAvailability,
+          status: 'parse_failed',
+          error: lastError,
+          raw: String(raw || '').slice(0, 3000),
+          latencyMs: t1 - t0
+        };
+      }
+
+      lastError = null;
+      return {
+        ok: true,
+        availability: lastAvailability,
+        status: 'ready',
+        engine: 'prompt_api',
+        results: obj.results,
+        latencyMs: t1 - t0
+      };
+    } catch (e) {
+      // 1st failure: if it looks transient, recreate the session once and retry.
+      const msg = String(e?.message || e);
+      if (isProbablyTransientPromptError(e)) {
+        try {
+          session = null;
+          await ensureSession();
+          const t0 = now();
+          const raw = await promptWithFallback(prompt, schema);
+          const t1 = now();
+          const obj = safeJsonParse(raw);
+          if (obj && Array.isArray(obj.results)) {
+            lastError = null;
+            return { ok: true, availability: lastAvailability, status: 'ready', engine: 'prompt_api', results: obj.results, latencyMs: t1 - t0, recovered: true };
+          }
+          lastError = 'invalid_json';
+          return { ok: false, availability: lastAvailability, status: 'parse_failed', error: lastError, raw: String(raw || '').slice(0, 3000), latencyMs: t1 - t0 };
+        } catch (e2) {
+          lastError = String(e2?.message || e2);
+          return { ok: false, availability: lastAvailability, status: 'prompt_failed', error: lastError };
+        }
+      }
+
+      lastError = msg;
+      return { ok: false, availability: lastAvailability, status: 'prompt_failed', error: lastError };
+    }
   });
-  const latencyMs = Math.round(performance.now() - t0);
-
-  let parsed;
-  try {
-    parsed = JSON.parse(raw);
-  } catch (e) {
-    log("warn", "JSON parse failed, returning empty", String(e), raw?.slice?.(0, 200));
-    return { ok: false, status: "parse_error", availability: "available", engine: "prompt_api", latencyMs: 0, results: [] };
-  }
-
-  const rawResults = Array.isArray(parsed?.results) ? parsed.results : [];
-  const results = rawResults.map(r => normalizeOneResult(r, topicList)).filter(Boolean);
-  return { ok: true, status: "ready", availability: "available", engine: "prompt_api", latencyMs, results };
 }
 
-chrome.runtime.onMessage.addListener((msg, _sender, sendResponse) => {
+chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   (async () => {
-    if (!msg || msg.target !== "offscreen") return;
+    if (!msg || typeof msg !== 'object') return;
+    if (msg.to !== 'offscreen') return;
 
-    if (msg.type === "FOLLONE_OFFSCREEN_STATUS") {
-      const availability =
-        typeof LanguageModel === "undefined"
-          ? "no_api"
-          : await LanguageModel.availability(LM_OPTIONS).catch(() => "error");
-      sendResponse({
-        ok: true,
-        status: sessionStatus,
-        availability,
-        hasSession: Boolean(session),
-        sessionAgeSec: session ? Math.round((Date.now() - sessionCreatedAt) / 1000) : 0,
-      });
-      return;
-    }
-
-    
-    // Direct classify (SW waits for this response; avoids SW pending-map loss)
-    
-    if (msg.type === "FOLLONE_OFFSCREEN_WARMUP") {
-      const ensure = await ensureSession();
-      sendResponse({ ok: ensure.ok, status: ensure.status, availability: ensure.availability, hasSession: Boolean(session) });
-      return;
-    }
-
-if (msg.type === "FOLLONE_OFFSCREEN_CLASSIFY_DIRECT") {
-      const batch = Array.isArray(msg.batch) ? msg.batch : [];
-      const topicList = Array.isArray(msg.topicList) ? msg.topicList : [];
-      try {
-        const out = await classifyBatch(batch, topicList);
-        sendResponse({ ...out, backend: "offscreen" });
-      } catch (e) {
+    switch (msg.type) {
+      case 'FOLLONE_BACKEND_STATUS': {
+        const avail = await availability();
         sendResponse({
-          ok: false,
-          backend: "offscreen",
-          engine: "none",
-          latencyMs: 0,
-          status: "unavailable",
-          availability: "error",
-          error: String(e),
-          results: []
+          ok: true,
+          version: VERSION,
+          availability: avail,
+          status: (session && avail === 'available') ? 'ready' : avail,
+          hasSession: !!session,
+          lastError
         });
+        return;
       }
-      return;
-    }
 
-if (msg.type === "FOLLONE_OFFSCREEN_CLASSIFY") {
-      const { requestId, batch, topicList, priority } = msg;
-      pushTask({ requestId, batch, topicList, priority: priority === "high" ? "high" : "low" });
-      sendResponse({ ok: true }); // immediate ack
-      return;
+      case 'FOLLONE_BACKEND_WARMUP': {
+        const res = await ensureSession();
+        sendResponse({ ...res, version: VERSION, hasSession: !!session });
+        return;
+      }
+
+      case 'FOLLONE_CLASSIFY_BATCH': {
+        const batch = Array.isArray(msg.batch) ? msg.batch : [];
+        const topicList = Array.isArray(msg.topicList) ? msg.topicList : [];
+        if (!batch.length) {
+          sendResponse({ ok: true, availability: lastAvailability, status: 'ready', engine: 'prompt_api', results: [] });
+          return;
+        }
+        const res = await classifyBatch(batch, topicList);
+        sendResponse(res);
+        return;
+      }
+
+      default:
+        sendResponse({ ok: false, error: 'unknown_message_type', type: msg.type });
+        return;
     }
   })().catch((e) => {
-    log("error", "onMessage handler error", String(e));
-    try {
-      sendResponse({ ok: false, error: String(e) });
-    } catch (_) {}
+    try { sendResponse({ ok: false, error: String(e) }); } catch (_) {}
   });
 
   return true;
 });
-
-log("info", "offscreen booted", { LanguageModel: typeof LanguageModel });

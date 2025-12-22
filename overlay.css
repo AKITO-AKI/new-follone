@@ -1,397 +1,345 @@
-/* follone overlay UI */
+/* follone overlay styles (v0.4.34-a)
+   Theme: white + pink (game HUD)
+*/
+
+:root {
+  --follone-pink: #ff4fa8;
+  --follone-pink2: #ff7cc4;
+  --follone-ink: rgba(12, 12, 16, 0.92);
+  --follone-card: rgba(255, 255, 255, 0.88);
+  --follone-line: rgba(0, 0, 0, 0.10);
+  --follone-shadow: 0 16px 50px rgba(0,0,0,0.18);
+  --follone-radius: 16px;
+  --follone-font: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, Helvetica, Arial;
+}
+
+#follone-widget, #follone-spotlight, #follone-loader {
+  font-family: var(--follone-font);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  box-sizing: border-box;
+}
+
+#follone-widget * { box-sizing: border-box; }
+
+/* -------------------------
+   Widget (minimal HUD)
+-------------------------- */
 #follone-widget {
-  --f-pink: #ff4fa3;
-  --f-pink-2: #ff89c8;
-  --f-ink: #2a2a2a;
-  --f-card: rgba(255,255,255,0.96);
-  --f-border: rgba(255,79,163,0.22);
-  --f-shadow: 0 18px 48px rgba(255,79,163,0.18), 0 18px 48px rgba(0,0,0,0.12);
-  --f-soft: rgba(255,79,163,0.10);
-
   position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 2147483647;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;
-}
-#follone-widget .panel {
-  width: 310px;
-  border-radius: 18px;
-  background: var(--f-card);
-  color: var(--f-ink);
-  box-shadow: var(--f-shadow);
-  overflow: hidden;
-  border: 1px solid var(--f-border);
-}
-#follone-widget .header {
-  padding: 12px 12px 10px 12px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  border-bottom: 1px solid var(--f-border);
-}
-#follone-widget .avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.9), rgba(255,255,255,0.1));
-  opacity: 0.9;
-}
-#follone-widget .title { font-weight: 800; letter-spacing: 0.2px; }
-#follone-widget .sub { font-size: 12px; opacity: 0.82; margin-top: 2px; }
-#follone-widget .body { padding: 12px; font-size: 13px; line-height: 1.45; }
-#follone-widget .muted { opacity: 0.8; font-size: 12px; margin-top: 10px; }
-#follone-widget button {
-  appearance: none;
-  border: 1px solid rgba(255,79,163,0.30);
-  background: linear-gradient(180deg, rgba(255,79,163,0.92), rgba(255,137,200,0.92));
-  color: #fff;
-  border-radius: 14px;
-  padding: 10px 12px;
-  font-weight: 900;
-  cursor: pointer;
-  box-shadow: 0 12px 26px rgba(255,79,163,0.18);
-  transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
-}
-#follone-widget button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 34px rgba(255,79,163,0.22);
-  filter: brightness(1.02);
-}
-
-#follone-overlay {
-  position: fixed;
-  inset: 0;
+  right: 14px;
+  bottom: 14px;
   z-index: 2147483646;
-  display: none;
-  background: rgba(255, 192, 220, 0.30);
-  backdrop-filter: blur(3px);
+  width: 280px;
+  pointer-events: auto;
 }
-#follone-overlay .card {
-  width: min(760px, calc(100vw - 28px));
-  margin: 12vh auto 0 auto;
-  border-radius: 16px;
-  background: rgba(20, 20, 22, 0.96);
-  color: var(--f-ink);
-  border: 1px solid var(--f-border);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+
+#follone-widget .follone-panel {
+  background: var(--follone-card);
+  border: 1px solid var(--follone-line);
+  border-radius: var(--follone-radius);
+  box-shadow: var(--follone-shadow);
   overflow: hidden;
+  backdrop-filter: blur(14px);
 }
-#follone-overlay .cardHeader {
-  padding: 14px 14px 12px 14px;
-  border-bottom: 1px solid rgba(255,255,255,0.10);
+
+#follone-widget .follone-top {
   display: flex;
-  gap: 10px;
   align-items: center;
-}
-#follone-overlay .cardBody {
-  padding: 14px;
-  font-size: 14px;
-  line-height: 1.55;
-}
-#follone-overlay .badge {
-  display: inline-block;
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 90, 90, 0.18);
-  border: 1px solid rgba(255, 90, 90, 0.35);
-  margin-left: auto;
+  justify-content: space-between;
+  padding: 10px 10px 8px 10px;
+  border-bottom: 1px solid var(--follone-line);
 }
 
-#follone-overlay button {
-  appearance:none;
-  border: 1px solid rgba(255,79,163,0.30);
-  background: linear-gradient(180deg, rgba(255,79,163,0.92), rgba(255,137,200,0.92));
-  color:#fff;
-  border-radius: 14px;
-  padding: 12px 14px;
-  font-weight: 900;
-  cursor:pointer;
-  box-shadow: 0 14px 34px rgba(255,79,163,0.18);
-}
-#follone-overlay button:hover{filter:brightness(1.02);transform:translateY(-1px);}
-#follone-overlay .actions {
-  padding: 14px;
-  border-top: 1px solid var(--f-border);
+#follone-widget .follone-brand {
   display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+#follone-widget .follone-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: radial-gradient(circle at 30% 30%, var(--follone-pink2), var(--follone-pink));
+  box-shadow: 0 0 0 3px rgba(255,79,168,0.15);
+}
+
+#follone-widget .follone-name {
+  font-weight: 800;
+  letter-spacing: 0.2px;
+  color: rgba(0,0,0,0.86);
+}
+
+#follone-widget .follone-chip {
+  margin-left: 2px;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 700;
+  color: rgba(0,0,0,0.76);
+  background: rgba(255,79,168,0.10);
+  border: 1px solid rgba(255,79,168,0.22);
+  white-space: nowrap;
+}
+
+#follone-widget .follone-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+#follone-widget .follone-btn {
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid var(--follone-line);
+  background: rgba(255,255,255,0.65);
+  color: rgba(0,0,0,0.82);
+  font-weight: 700;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+#follone-widget .follone-btn:hover { filter: brightness(0.98); }
+#follone-widget .follone-btn:active { transform: translateY(1px); }
+
+#follone-widget .follone-btn.solid {
+  background: var(--follone-pink);
+  border-color: rgba(0,0,0,0.06);
+  color: white;
+}
+
+#follone-widget .follone-btn.ghost.off {
+  background: rgba(0,0,0,0.06);
+  color: rgba(0,0,0,0.68);
+}
+
+#follone-widget .follone-bars {
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
   gap: 10px;
 }
-#follone-overlay .actions button { flex: 1; }
 
+#follone-widget .follone-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+  color: rgba(0,0,0,0.78);
+  padding: 0 2px;
+}
 
-/* -------- follone v0.4.9: loader + analyzing badge -------- */
+#follone-widget .follone-row .lbl {
+  font-weight: 800;
+}
+
+#follone-widget .follone-row .val {
+  font-weight: 700;
+  color: rgba(0,0,0,0.64);
+}
+
+#follone-widget .follone-barwrap {
+  width: 100%;
+  height: 10px;
+  border-radius: 999px;
+  background: rgba(0,0,0,0.06);
+  overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.06);
+}
+
+#follone-widget .follone-barwrap.thin { height: 8px; }
+
+#follone-widget .follone-barfill {
+  width: 0%;
+  height: 100%;
+  border-radius: 999px;
+  background: linear-gradient(90deg, var(--follone-pink), var(--follone-pink2));
+  transition: width 240ms ease;
+}
+
+#follone-widget .follone-barfill.alt {
+  background: linear-gradient(90deg, rgba(0,0,0,0.72), rgba(255,79,168,0.85));
+}
+
+#follone-widget .follone-hint {
+  padding: 8px 10px 10px 10px;
+  font-size: 12px;
+  color: rgba(0,0,0,0.62);
+  border-top: 1px solid var(--follone-line);
+}
+
+/* -------------------------
+   Loader
+-------------------------- */
 #follone-loader {
   position: fixed;
   inset: 0;
-  z-index: 2147483646;
-  display: none;
+  z-index: 2147483647;
+  display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(1200px 900px at 50% 30%, rgba(255,79,163,0.14), rgba(255,255,255,0.85));
-  backdrop-filter: blur(10px);
-}
-#follone-loader.show { display: flex; }
-#follone-loader .box {
-  width: min(720px, 92vw);
-  padding: 22px 22px 18px;
-  border-radius: 18px;
-  border: 1px solid var(--f-border);
-  background: rgba(255,255,255,0.75);
-  box-shadow: 0 22px 70px rgba(255,79,163,0.20), 0 22px 70px rgba(0,0,0,0.12);
-}
-#follone-loader .brand {
-  color: var(--f-pink);
-  font-weight: 950;
-  letter-spacing: 0.08em;
-  font-size: 38px;
-  line-height: 1.1;
-  margin-bottom: 10px;
-}
-#follone-loader .brand .ch {
-  display: inline-block;
-  opacity: 0;
-  transform: translateY(10px);
-  animation: follone-pop 600ms ease forwards;
-}
-@keyframes follone-pop {
-  to { opacity: 1; transform: translateY(0); }
-}
-#follone-loader .subtitle {
-  opacity: 0.9;
-  margin-top: 8px;
-  font-weight: 700;
-}
-#follone-loader .quote {
-  margin-top: 10px;
-  opacity: 0.82;
-  font-size: 14px;
-  line-height: 1.6;
-}
-#follone-loader .progressWrap {
-  margin-top: 16px;
-  height: 10px;
-  border-radius: 999px;
-  border: 1px solid var(--f-border);
-  background: rgba(255,79,163,0.10);
-  overflow: hidden;
-}
-#follone-loader .progressBar {
-  height: 100%;
-  width: 0%;
-  border-radius: 999px;
-  background: rgba(255,79,163,0.85);
-  transition: width 240ms linear;
-}
-#follone-loader .meta {
-  margin-top: 10px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12px;
-  opacity: 0.78;
-}
-#follone-loader .pill {
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--f-border);
-  background: rgba(0,0,0,0.28);
-}
-
-.follone-analyzing{ outline: none !important; position: relative; }
-.follone-analyzing::after{ content:""; display:none !important; }
-
-
-/* Widget: EXP + dashboard */
-#follone-widget .exp {
-  margin-top: 10px;
-  padding: 10px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.10);
-}
-#follone-widget .expRow {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  opacity: 0.95;
-  margin-bottom: 8px;
-}
-#follone-widget .expBarWrap {
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.10);
-  overflow: hidden;
-}
-#follone-widget .expBar {
-  height: 100%;
-  width: 0%;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.85);
-}
-
-#follone-widget .dash {
-  margin-top: 10px;
-  padding: 10px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.10);
-}
-
-/* -------- follone v0.4.32: spotlight intervention -------- */
-#follone-spotlight {
-  position: fixed;
-  inset: 0;
-  z-index: 2147483646;
-  display: none;
-  pointer-events: none; /* veils + popover will handle interactions */
-}
-#follone-spotlight.show { display: block; }
-
-#follone-spotlight .veil {
-  position: fixed;
-  background: rgba(255, 192, 220, 0.30);
-  backdrop-filter: blur(2px);
-  pointer-events: auto;
-}
-
-#follone-spotlight .popover {
-  position: fixed;
-  width: min(380px, calc(100vw - 28px));
-  max-height: min(70vh, 560px);
-  overflow: auto;
-  border-radius: 16px;
-  background: rgba(20, 20, 22, 0.96);
-  color: #fff;
-  border: 1px solid rgba(255,79,163,0.30);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-  pointer-events: auto;
-}
-#follone-spotlight .popover .ph {
-  padding: 12px 12px 10px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.10);
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-#follone-spotlight .popover .pb {
-  padding: 12px;
-  font-size: 14px;
-  line-height: 1.55;
-}
-#follone-spotlight .popover .badge {
-  display: inline-block;
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 90, 90, 0.18);
-  border: 1px solid rgba(255, 90, 90, 0.35);
-  margin-left: auto;
-}
-#follone-spotlight .popover .actions {
-  padding: 12px;
-  border-top: 1px solid rgba(255,255,255,0.10);
-  display: flex;
-  gap: 10px;
-}
-#follone-spotlight .popover .actions button {
-  flex: 1;
-  appearance:none;
-  border: 1px solid rgba(255,79,163,0.30);
-  background: linear-gradient(180deg, rgba(255,79,163,0.92), rgba(255,137,200,0.92));
-  color:#fff;
-  border-radius: 14px;
-  padding: 12px 14px;
-  font-weight: 900;
-  cursor:pointer;
-  box-shadow: 0 14px 34px rgba(255,79,163,0.18);
-}
-#follone-spotlight .popover .actions button:hover{filter:brightness(1.02);transform:translateY(-1px);}
-
-.follone-spotlight-target {
-  outline: 3px solid rgba(255,79,163,0.85) !important;
-  border-radius: 14px;
-  box-shadow: 0 18px 70px rgba(255,79,163,0.28);
-}
-
-.follone-target-badge {
-  position: absolute;
-  right: 12px;
-  top: 12px;
-  z-index: 2;
-  padding: 6px 10px;
-  border-radius: 999px;
-  font-size: 12px;
-  font-weight: 900;
-  background: rgba(20,20,22,0.88);
-  border: 1px solid rgba(255,79,163,0.35);
-  color: #fff;
   pointer-events: none;
 }
-#follone-widget .dashTitle {
-  font-size: 12px;
-  opacity: 0.95;
-  margin-bottom: 8px;
+
+#follone-loader.follone-hidden { display: none; }
+
+#follone-loader .follone-loader-card {
+  width: min(420px, calc(100vw - 40px));
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 22px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.25);
+  padding: 18px 18px 16px 18px;
+  backdrop-filter: blur(14px);
 }
-#follone-widget .dashRow {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  opacity: 0.92;
+
+#follone-loader .follone-loader-title {
+  font-weight: 900;
+  font-size: 18px;
+  color: rgba(0,0,0,0.86);
+  letter-spacing: 0.3px;
+  margin-bottom: 6px;
 }
-#follone-widget .dashBarWrap {
-  margin-top: 8px;
-  height: 8px;
+
+#follone-loader .follone-loader-sub {
+  font-size: 13px;
+  color: rgba(0,0,0,0.64);
+  margin-bottom: 12px;
+}
+
+#follone-loader .follone-loader-bar {
+  height: 10px;
   border-radius: 999px;
-  background: rgba(255,255,255,0.10);
+  background: rgba(0,0,0,0.07);
   overflow: hidden;
+  border: 1px solid rgba(0,0,0,0.08);
 }
-#follone-widget .dashBar {
-  height: 100%;
+
+#follone-loader .follone-loader-fill {
   width: 0%;
+  height: 100%;
   border-radius: 999px;
-  background: rgba(255,255,255,0.70);
-}
-#follone-widget .dashSmall {
-  margin-top: 8px;
-  font-size: 11px;
-  opacity: 0.82;
-  line-height: 1.35;
-}
-#follone-widget #follone-bubble-search {
-  width: 100%;
-  margin-top: 10px;
+  background: linear-gradient(90deg, var(--follone-pink), var(--follone-pink2));
+  transition: width 160ms ease;
 }
 
-
-/* Context invalidated banner */
-#follone-ctx-banner{
+/* -------------------------
+   Spotlight
+-------------------------- */
+#follone-spotlight {
   position: fixed;
-  left: 16px;
-  bottom: 16px;
+  left: 0;
+  top: 0;
+  width: 100vw;
+  height: 100vh;
   z-index: 2147483647;
   pointer-events: auto;
 }
-#follone-ctx-banner .ctxCard{
-  width: 280px;
-  border-radius: 14px;
-  padding: 12px;
-  background: rgba(20,20,20,0.92);
-  border: 1px solid var(--f-border);
-  color: rgba(255,255,255,0.92);
-  box-shadow: 0 18px 60px rgba(0,0,0,0.35);
+
+#follone-spotlight.follone-hidden { display: none; }
+
+#follone-spotlight .veil {
+  position: absolute;
+  background: rgba(0,0,0,0.56);
+  backdrop-filter: blur(2px);
 }
-#follone-ctx-banner .ctxTitle{ font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-#follone-ctx-banner .ctxBody{ font-size: 12px; opacity: 0.9; line-height: 1.4; margin-bottom: 10px; }
-#follone-ctx-banner .ctxRow{ display:flex; gap:8px; }
-#follone-ctx-banner button{
-  flex:1;
-  height: 32px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.10);
-  color: rgba(255,255,255,0.92);
+
+#follone-spotlight .follone-pop {
+  position: absolute;
+  min-width: 260px;
+  max-width: 420px;
+  background: rgba(255,255,255,0.92);
+  border: 1px solid rgba(0,0,0,0.12);
+  border-radius: 18px;
+  box-shadow: 0 30px 90px rgba(0,0,0,0.35);
+  overflow: hidden;
+}
+
+#follone-spotlight .follone-pop-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 12px 10px 12px;
+  border-bottom: 1px solid rgba(0,0,0,0.10);
+}
+
+#follone-spotlight .follone-pop-head .title {
+  font-weight: 900;
+  color: rgba(0,0,0,0.84);
+  font-size: 14px;
+}
+
+#follone-spotlight .follone-pop-head .close {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  border: 1px solid rgba(0,0,0,0.10);
+  background: rgba(0,0,0,0.06);
   cursor: pointer;
+  font-size: 18px;
+  line-height: 28px;
+  font-weight: 900;
+  color: rgba(0,0,0,0.70);
 }
-#follone-ctx-banner button.ghost{ background: rgba(255,255,255,0.04); }
+
+#follone-spotlight .follone-pop-body {
+  padding: 10px 12px 2px 12px;
+  color: rgba(0,0,0,0.76);
+  font-size: 13px;
+}
+
+#follone-spotlight .follone-pop-meta {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+
+#follone-spotlight .pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 3px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 800;
+  background: rgba(0,0,0,0.06);
+  border: 1px solid rgba(0,0,0,0.08);
+}
+
+#follone-spotlight .pill.danger {
+  background: rgba(255,79,168,0.10);
+  border-color: rgba(255,79,168,0.22);
+  color: rgba(0,0,0,0.78);
+}
+
+#follone-spotlight .follone-pop-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px 12px 12px;
+}
+
+#follone-spotlight .follone-pop-btn {
+  width: 100%;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(0,0,0,0.10);
+  background: rgba(255,255,255,0.75);
+  cursor: pointer;
+  font-weight: 800;
+  font-size: 12px;
+  color: rgba(0,0,0,0.80);
+  text-align: left;
+}
+
+#follone-spotlight .follone-pop-btn:hover {
+  border-color: rgba(255,79,168,0.35);
+}
+
+#follone-spotlight .follone-pop-btn:active {
+  transform: translateY(1px);
+}
+

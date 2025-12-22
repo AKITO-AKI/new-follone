@@ -1,157 +1,125 @@
 <!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>follone Options</title>
-  <link rel="stylesheet" href="options.css">
+  <meta charset="utf-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1"/>
+  <title>follone 設定</title>
+  <link rel="stylesheet" href="options.css"/>
 </head>
 <body>
   <div class="wrap">
-    <h1>follone Options</h1>
+    <header class="hero">
+      <div class="brand">
+        <div class="dot"></div>
+        <div>
+          <div class="name">follone</div>
+          <div class="sub">設定 / 診断</div>
+        </div>
+      </div>
+      <div class="meta" id="ver">--</div>
+    </header>
 
     <section class="card">
       <h2>基本</h2>
-      <label class="row">
-        <span>有効</span>
-        <input type="checkbox" id="enabled">
-      </label>
+      <div class="row">
+        <div class="label">有効化</div>
+        <label class="switch">
+          <input type="checkbox" id="enabled"/>
+          <span class="slider"></span>
+        </label>
+      </div>
 
-      <label>
-        <span>AIモード</span>
+      <div class="row">
+        <div class="label">AIモード</div>
         <select id="aiMode">
-          <option value="auto">auto（Prompt APIがあれば使用 / なければMock）</option>
-          <option value="mock">mock（簡易判定のみで常に動作）</option>
-          <option value="off">off（AI判定なし）</option>
+          <option value="auto">Auto（Prompt API優先）</option>
+          <option value="mock">Mock（簡易判定）</option>
+          <option value="off">OFF</option>
         </select>
-      </label>
-
-      <div class="grid2" style="margin-top:10px;">
-        <label>
-          <span>危険（ソフト）閾値</span>
-          <input type="number" id="riskSoft" min="0" max="100" step="1">
-        </label>
-        <label>
-          <span>危険（ハード）閾値</span>
-          <input type="number" id="riskHard" min="0" max="100" step="1">
-        </label>
       </div>
 
-      <div class="grid2">
-        <label>
-          <span>バッチ数</span>
-          <input type="number" id="batchSize" min="1" max="8" step="1">
-        </label>
-        <label>
-          <span>アイドル(ms)</span>
-          <input type="number" id="idleMs" min="100" max="5000" step="10">
+      <div class="row">
+        <div class="label">スポットライト介入</div>
+        <label class="switch">
+          <input type="checkbox" id="enableSpotlight"/>
+          <span class="slider"></span>
         </label>
       </div>
     </section>
 
     <section class="card">
-      <h2>フィルターバブル</h2>
-      <div class="grid2">
-        <label>
-          <span>窓（件）</span>
-          <input type="number" id="topicWindow" min="10" max="200">
-        </label>
-        <label>
-          <span>最小サンプル</span>
-          <input type="number" id="bubbleMinSamples" min="10" max="100">
-        </label>
+      <h2>判定しきい値</h2>
+      <div class="row">
+        <div class="label">介入最小リスク</div>
+        <input type="number" id="minRiskToIntervene" step="0.01" min="0" max="1"/>
       </div>
-
-      <div class="grid2">
-        <label>
-          <span>dominance</span>
-          <input type="number" id="bubbleDominance" min="0.3" max="0.95" step="0.01">
-        </label>
-        <label>
-          <span>entropy(低いほど偏り)</span>
-          <input type="number" id="bubbleEntropy" min="0.1" max="1.0" step="0.01">
-        </label>
-      </div>
-
-      <div class="grid2">
-        <label>
-          <span>クールダウン(ms)</span>
-          <input type="number" id="bubbleCooldownMs" min="10000" max="3600000" step="1000">
-        </label>
-        <label class="row">
-          <span>提案にLLMを使う</span>
-          <input type="checkbox" id="bubbleUseLLM">
-        </label>
+      <div class="row">
+        <div class="label">検索促し最小リスク</div>
+        <input type="number" id="minRiskToPromptSearch" step="0.01" min="0" max="1"/>
       </div>
     </section>
 
     <section class="card">
-      <h2>トピックカテゴリ（1行=1カテゴリ、最大30）</h2>
-      <textarea id="topics" rows="10"></textarea>
-    </section>
-
-    <section class="card">
-      <h2>レポート</h2>
-      <div class="grid2">
-        <label>
-          <span>レポート最小秒</span>
-          <input type="number" id="reportMinSeconds" min="10" max="3600">
-        </label>
-        <label>
-          <span>無操作提案秒</span>
-          <input type="number" id="inactiveSuggestSeconds" min="30" max="3600">
-        </label>
+      <h2>パフォーマンス</h2>
+      <div class="row">
+        <div class="label">バッチサイズ</div>
+        <input type="number" id="batchSize" min="1" max="10" step="1"/>
       </div>
-      <div class="grid2">
-        <label>
-          <span>無操作提案クール(ms)</span>
-          <input type="number" id="inactiveCooldownMs" min="10000" max="3600000" step="1000">
-        </label>
+      <div class="row">
+        <div class="label">アイドル復帰(ms)</div>
+        <input type="number" id="idleMs" min="2000" max="600000" step="1000"/>
+      </div>
+      <div class="row">
+        <div class="label">テキスト上限(文字)</div>
+        <input type="number" id="maxTextChars" min="40" max="400" step="10"/>
       </div>
     </section>
 
-
     <section class="card">
-      <h2>Prompt API / モデル準備</h2>
-      <div class="muted">
-        初回はモデルのダウンロードが必要です。ダウンロード開始には「ユーザー操作（クリック）」が必要になる場合があります。<br>
-        ここで一度「AIモデルを準備」を押しておくと、X上ではオフスクリーン（拡張機能側）でPrompt APIが動くようになります。
+      <h2>ログ</h2>
+      <div class="row">
+        <div class="label">デバッグ</div>
+        <label class="switch">
+          <input type="checkbox" id="debug"/>
+          <span class="slider"></span>
+        </label>
       </div>
-      <div class="grid2" style="margin-top:10px;">
-        <button id="warmup" type="button">AIモデルを準備（初回のみ）</button>
-        <button id="backendStatus" type="button">バックエンド状態</button>
-      </div>
-      <div class="muted" style="margin-top:8px;">状態:</div>
-      <pre id="aiStatus" class="pre"></pre>
-    </section>
-
-
-    <section class="card">
-      <h2>デバッグ</h2>
-      <label class="row">
-        <span>ログを出す</span>
-        <input type="checkbox" id="debug">
-      </label>
-
-      <label>
-        <span>ログレベル</span>
+      <div class="row">
+        <div class="label">ログレベル</div>
         <select id="logLevel">
           <option value="debug">debug</option>
           <option value="info">info</option>
           <option value="warn">warn</option>
           <option value="error">error</option>
         </select>
-      </label>
-
-      <div class="muted" style="margin-top:8px;">
-        DevToolsのConsoleで「[follone]」で検索すると追跡しやすいです。
       </div>
     </section>
 
-    <div class="footer">
-      <button id="save">保存</button>
-      <span id="status"></span>
-    </div>
+    <section class="card">
+      <h2>診断</h2>
+      <div class="diag">
+        <div class="k">Prompt API availability</div>
+        <div class="v" id="avail">--</div>
+        <div class="k">Backend status</div>
+        <div class="v" id="status">--</div>
+        <div class="k">hasSession</div>
+        <div class="v" id="hasSession">--</div>
+        <div class="k">lastError</div>
+        <div class="v mono" id="lastError">--</div>
+      </div>
+      <div class="actions">
+        <button id="refresh" class="btn">更新</button>
+        <button id="warmup" class="btn solid">AI起動</button>
+      </div>
+      <p class="note">
+        「AI起動」でPrompt APIのセッション生成（必要ならダウンロード開始）を試行します。
+      </p>
+    </section>
+
+    <footer class="foot">
+      <span>follone</span>
+      <span class="muted">X / Twitter content safety assistant</span>
+    </footer>
   </div>
 
   <script src="options.js"></script>

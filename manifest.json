@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "follone for X",
-  "version": "0.4.33",
-  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。Spotlight介入（危険投稿のスポットライト＋スクロール停止＋横ポップアップ）。",
+  "version": "0.4.35",
+  "description": "Detects risky/biasing content on X/Twitter and nudges users to verify information (Prompt API-first).",
   "permissions": [
     "offscreen",
     "storage"
@@ -24,14 +24,22 @@
       "js": [
         "content.js"
       ],
-      "css": [
-        "overlay.css"
-      ],
+      "css": [],
       "run_at": "document_idle"
     }
   ],
   "options_page": "options.html",
   "action": {
     "default_title": "follone"
-  }
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "overlay.css"
+      ],
+      "matches": [
+        "<all_urls>"
+      ]
+    }
+  ]
 }
