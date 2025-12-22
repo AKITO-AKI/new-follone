@@ -14,6 +14,9 @@
   // -----------------------------
   const RISK_ENUM = ["誹謗中傷", "政治", "偏見", "差別", "詐欺", "成人向け", "なし"];
 
+
+  const REASON_ENUM = ["攻撃的な言い回し", "個人への非難", "煽り/扇動", "属性の一般化", "差別的表現", "政治的煽動", "誤情報の可能性", "金銭/誘導", "詐欺の可能性", "性的示唆", "露骨な表現", "スパム/宣伝", "過度な断定", "低情報量", "画像のみ", "絵文字のみ"];
+
   const FALLBACK_TOPICS = [
     "社会","政治","経済","国際","テック","科学","教育","健康",
     "スポーツ","エンタメ","音楽","映画/アニメ","ゲーム","趣味",
@@ -38,6 +41,7 @@
     riskHard: 75,
     batchSize: 3,
     idleMs: 650,
+    maxTextChars: 200,
 
     topicWindow: 30,
     bubbleDominance: 0.62,
@@ -131,6 +135,11 @@
     riskCache: new Map(),
     elemById: new Map(),
 
+    // Highlight / intervention gating
+    pendingInterventions: new Map(), // id -> { elem, res, ctx, ts }
+    highlightFlushTimer: 0,
+
+
 
     // v0.4.10 pre-analysis pipeline
     sentForAnalysis: new Set(),
@@ -164,7 +173,14 @@
     dashTop: null,
     dashQueries: [],
     riskCount: 0,
-    topicCounts: new Map()
+    topicCounts: new Map(),
+
+    // v0.4.32: spotlight intervention runtime
+    spotlightOpen: false,
+    spotlightId: null,
+    spotlightElem: null,
+    spotlightRestore: null,
+    spotlightLayoutTimer: 0
   };
 
   // -----------------------------
@@ -552,18 +568,13 @@ function onContextInvalidated(err) {
 
   function shrinkResultForCache(r) {
     if (!r) return null;
-    const cut = (s, n) => {
-      const t = String(s || "");
-      return t.length > n ? t.slice(0, n) + "…" : t;
-    };
+    const reasons = Array.isArray(r.reasons) ? r.reasons.slice(0, 2).map(x => String(x)) : [];
     return {
       id: String(r.id || ""),
       riskScore: Number(r.riskScore || 0),
       riskCategory: String(r.riskCategory || "なし"),
       topicCategory: String(r.topicCategory || "その他"),
-      summary: cut(r.summary, 120),
-      explanation: cut(r.explanation, 220),
-      suggestedSearches: Array.isArray(r.suggestedSearches) ? r.suggestedSearches.slice(0, 3) : [],
+      reasons,
       _source: r._source || "ai",
       _ts: Date.now()
     };
@@ -709,20 +720,329 @@ function openXSearch(q) {
   }
 
 }
-  function lockScroll(lock) {
-    const html = document.documentElement;
-    const body = document.body;
-    if (lock) {
-      html.dataset.follonePrevOverflow = html.style.overflow || "";
-      body.dataset.follonePrevOverflow = body.style.overflow || "";
-      html.style.overflow = "hidden";
-      body.style.overflow = "hidden";
-    } else {
-      html.style.overflow = html.dataset.follonePrevOverflow || "";
-      body.style.overflow = body.dataset.follonePrevOverflow || "";
-      delete html.dataset.follonePrevOverflow;
-      delete body.dataset.follonePrevOverflow;
+  // NOTE: X (x.com) uses nested scroll containers. Locking <html>/<body> overflow can
+  // unexpectedly reset the app's internal scroll position. We therefore lock the
+  // nearest scrollable ancestor of the target post.
+  function findScrollContainer(fromElem) {
+    let el = fromElem;
+    while (el && el !== document.body && el !== document.documentElement) {
+      try {
+        const cs = getComputedStyle(el);
+        const oy = cs.overflowY;
+        const isScrollable = (oy === "auto" || oy === "scroll" || oy === "overlay") &&
+          (el.scrollHeight > el.clientHeight + 8);
+        if (isScrollable) return el;
+      } catch (_) {}
+      el = el.parentElement;
     }
+    const se = document.scrollingElement;
+    try {
+      if (se && se.scrollHeight > se.clientHeight + 8) return se;
+    } catch (_) {}
+    return null;
+  }
+
+  function lockScroll(lock, anchorElem) {
+    if (lock) {
+      if (state.scrollLock && state.scrollLock.locked) return;
+
+      const scroller = findScrollContainer(anchorElem || state.spotlightElem);
+      if (scroller) {
+        const snap = {
+          locked: true,
+          el: scroller,
+          scrollTop: 0,
+          prev: {
+            overflow: scroller.style.overflow || "",
+            overflowY: scroller.style.overflowY || "",
+            overscrollBehavior: scroller.style.overscrollBehavior || ""
+          }
+        };
+        try { snap.scrollTop = scroller.scrollTop; } catch (_) { snap.scrollTop = 0; }
+        state.scrollLock = snap;
+
+        // Freeze this container only.
+        try {
+          scroller.style.overscrollBehavior = "contain";
+          scroller.style.overflowY = "hidden";
+          scroller.style.overflow = "hidden";
+          // Keep position stable.
+          scroller.scrollTop = snap.scrollTop;
+        } catch (_) {}
+        return;
+      }
+
+      // Fallback: do not touch overflow (avoid unexpected jumps). Wheel/keydown capture
+      // handlers still prevent user scrolling during spotlight.
+      state.scrollLock = { locked: true, el: null, scrollTop: 0, prev: null, fallback: true };
+      return;
+    }
+
+    const snap = state.scrollLock;
+    state.scrollLock = null;
+    if (!snap || !snap.locked) return;
+    if (snap.el && snap.prev) {
+      try {
+        snap.el.style.overflow = snap.prev.overflow;
+        snap.el.style.overflowY = snap.prev.overflowY;
+        snap.el.style.overscrollBehavior = snap.prev.overscrollBehavior;
+      } catch (_) {}
+      try { snap.el.scrollTop = snap.scrollTop; } catch (_) {}
+    }
+  }
+
+  // -----------------------------
+  // Spotlight intervention (v0.4.32)
+  // -----------------------------
+  function scheduleSpotlightLayout() {
+    if (!state.spotlightOpen) return;
+    if (state.spotlightLayoutTimer) return;
+    state.spotlightLayoutTimer = window.setTimeout(() => {
+      state.spotlightLayoutTimer = 0;
+      try {
+        if (state.spotlightOpen && state.spotlightElem) layoutSpotlight(state.spotlightElem);
+      } catch (_) {}
+    }, 60);
+  }
+
+  function layoutSpotlight(targetElem) {
+    const sp = document.getElementById("follone-spotlight");
+    if (!sp || !targetElem) return;
+    const top = document.getElementById("follone-sp-top");
+    const left = document.getElementById("follone-sp-left");
+    const right = document.getElementById("follone-sp-right");
+    const bottom = document.getElementById("follone-sp-bottom");
+    const pop = document.getElementById("follone-sp-pop");
+    if (!top || !left || !right || !bottom || !pop) return;
+
+    const r = targetElem.getBoundingClientRect();
+    const pad = 10;
+    const vw = Math.max(1, window.innerWidth);
+    const vh = Math.max(1, window.innerHeight);
+
+    // Clamp the "hole" to viewport.
+    const holeL = Math.max(8, Math.min(vw - 8, Math.floor(r.left - pad)));
+    const holeT = Math.max(8, Math.min(vh - 8, Math.floor(r.top - pad)));
+    const holeR = Math.max(8, Math.min(vw - 8, Math.ceil(r.right + pad)));
+    const holeB = Math.max(8, Math.min(vh - 8, Math.ceil(r.bottom + pad)));
+    const holeW = Math.max(1, holeR - holeL);
+    const holeH = Math.max(1, holeB - holeT);
+
+    // Veils around the hole
+    top.style.left = "0px";
+    top.style.top = "0px";
+    top.style.width = "100vw";
+    top.style.height = `${holeT}px`;
+
+    bottom.style.left = "0px";
+    bottom.style.top = `${holeB}px`;
+    bottom.style.width = "100vw";
+    bottom.style.height = `${Math.max(0, vh - holeB)}px`;
+
+    left.style.left = "0px";
+    left.style.top = `${holeT}px`;
+    left.style.width = `${holeL}px`;
+    left.style.height = `${holeH}px`;
+
+    right.style.left = `${holeR}px`;
+    right.style.top = `${holeT}px`;
+    right.style.width = `${Math.max(0, vw - holeR)}px`;
+    right.style.height = `${holeH}px`;
+
+    // Popover placement: prefer right, otherwise left, otherwise bottom.
+    const margin = 12;
+    const preferRight = (vw - holeR) > 420;
+    const preferLeft = holeL > 420;
+    let popLeft = margin;
+    let popTop = Math.max(margin, holeT);
+    if (preferRight) {
+      popLeft = Math.min(vw - margin - pop.offsetWidth, holeR + margin);
+      popTop = Math.min(vh - margin - pop.offsetHeight, Math.max(margin, holeT));
+    } else if (preferLeft) {
+      popLeft = Math.max(margin, holeL - margin - pop.offsetWidth);
+      popTop = Math.min(vh - margin - pop.offsetHeight, Math.max(margin, holeT));
+    } else {
+      popLeft = Math.min(vw - margin - pop.offsetWidth, Math.max(margin, holeL));
+      popTop = Math.min(vh - margin - pop.offsetHeight, holeB + margin);
+    }
+    pop.style.left = `${Math.max(margin, popLeft)}px`;
+    pop.style.top = `${Math.max(margin, popTop)}px`;
+  }
+
+  function closeSpotlight(reason) {
+    if (!state.spotlightOpen) return;
+    try { log("info","[SPOTLIGHT]","close", { reason, id: state.spotlightId }); } catch (_) {}
+
+    const restore = state.spotlightRestore;
+
+    // Cleanup listeners
+    try { if (restore && typeof restore.cleanup === "function") restore.cleanup(); } catch (_) {}
+
+    // Restore target
+    try {
+      if (state.spotlightElem) {
+        state.spotlightElem.classList.remove("follone-spotlight-target");
+        const b = state.spotlightElem.querySelector(".follone-target-badge");
+        if (b) b.remove();
+      }
+    } catch (_) {}
+    try { if (restore && typeof restore.targetRestore === "function") restore.targetRestore(); } catch (_) {}
+
+    // UI hide
+    try {
+      const sp = document.getElementById("follone-spotlight");
+      if (sp) {
+        sp.classList.remove("show");
+        sp.onclick = null;
+      }
+    } catch (_) {}
+
+    // Unlock scroll
+    try { lockScroll(false); } catch (_) {}
+
+    state.spotlightRestore = null;
+    state.spotlightOpen = false;
+    state.spotlightId = null;
+    state.spotlightElem = null;
+  }
+
+  function openSpotlight(opts) {
+    const { elem, id, severity, badgeText, subText, html, muted, searches, cat, score } = opts || {};
+    const sp = document.getElementById("follone-spotlight");
+    const pop = document.getElementById("follone-sp-pop");
+    if (!sp || !pop || !elem) {
+      return false;
+    }
+
+    // Close any existing spotlight
+    try { closeSpotlight("reopen"); } catch (_) {}
+
+    state.spotlightOpen = true;
+    state.spotlightId = String(id || "");
+    state.spotlightElem = elem;
+
+    // Fill popover
+    try {
+      const t = document.getElementById("follone-sp-text");
+      const m = document.getElementById("follone-sp-muted");
+      const b = document.getElementById("follone-sp-badge");
+      const s = document.getElementById("follone-sp-sub");
+      if (t) t.innerHTML = html || "";
+      if (m) m.textContent = muted || "";
+      if (b) b.textContent = badgeText || "注意";
+      if (s) s.textContent = subText || "介入";
+    } catch (_) {}
+
+    // Target emphasis + interaction disable
+    const prev = {
+      pointerEvents: elem.style.pointerEvents,
+      position: elem.style.position,
+      zIndex: elem.style.zIndex
+    };
+    elem.classList.add("follone-spotlight-target");
+    elem.style.pointerEvents = "none";
+    if (!prev.position) {
+      // allow absolute badge positioning without overriding existing layout
+      elem.style.position = "relative";
+    }
+
+    // Small badge on the post itself (helps identify which post triggered)
+    try {
+      const bb = document.createElement("div");
+      bb.className = "follone-target-badge";
+      bb.textContent = `${String(cat || "")}${cat ? " / " : ""}${String(score ?? "")}`.trim();
+      if (bb.textContent) elem.appendChild(bb);
+    } catch (_) {}
+
+    // Show overlay
+    sp.classList.add("show");
+
+    // Stop scroll (double guard)
+    lockScroll(true, elem);
+    const wheelBlock = (e) => {
+      if (!state.spotlightOpen) return;
+      e.preventDefault();
+      e.stopPropagation();
+    };
+    const keyBlock = (e) => {
+      if (!state.spotlightOpen) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        closeSpotlight("esc");
+        return;
+      }
+      const keys = ["ArrowUp","ArrowDown","PageUp","PageDown","Home","End"," "];
+      if (keys.includes(e.key)) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    window.addEventListener("wheel", wheelBlock, { passive: false, capture: true });
+    window.addEventListener("touchmove", wheelBlock, { passive: false, capture: true });
+    window.addEventListener("keydown", keyBlock, true);
+    window.addEventListener("resize", scheduleSpotlightLayout, true);
+    window.addEventListener("scroll", scheduleSpotlightLayout, true);
+
+    // Veil click closes
+    sp.onclick = (e) => {
+      const t = e.target;
+      if (t && t.classList && t.classList.contains("veil")) {
+        closeSpotlight("veil");
+      }
+    };
+
+    // Buttons
+    const btnBack = document.getElementById("follone-sp-back");
+    const btnSearch = document.getElementById("follone-sp-search");
+    const btnCont = document.getElementById("follone-sp-continue");
+    if (btnBack) btnBack.onclick = () => {
+      closeSpotlight("back");
+      try {
+        // keep the risky post de-emphasized after user chooses to step back
+        elem.style.filter = "blur(8px)";
+        elem.style.pointerEvents = "none";
+      } catch (_) {}
+      try { addXp(xpForIntervention(severity)); } catch (_) {}
+      window.scrollBy({ top: -Math.min(900, window.innerHeight), behavior: "smooth" });
+    };
+    if (btnSearch) btnSearch.onclick = () => {
+      const list = Array.isArray(searches) ? searches : [];
+      const q = list[0] || "良いニュース";
+      try { openXSearch(q); } catch (_) {}
+      closeSpotlight("search");
+      try { addXp(xpForIntervention(severity) + 2); } catch (_) {}
+    };
+    if (btnCont) btnCont.onclick = () => {
+      closeSpotlight("continue");
+      try { addXp(1); } catch (_) {}
+    };
+
+    // Layout now + after next frame (popover dimensions stabilize)
+    try { layoutSpotlight(elem); } catch (_) {}
+    try { requestAnimationFrame(() => { if (state.spotlightOpen) layoutSpotlight(elem); }); } catch (_) {}
+
+    // Cleanup hook
+    state.spotlightRestore = {
+      targetRestore: () => {
+        try {
+          elem.style.pointerEvents = prev.pointerEvents;
+          elem.style.position = prev.position;
+          elem.style.zIndex = prev.zIndex;
+        } catch (_) {}
+      },
+      cleanup: () => {
+        try {
+          window.removeEventListener("wheel", wheelBlock, true);
+          window.removeEventListener("touchmove", wheelBlock, true);
+          window.removeEventListener("keydown", keyBlock, true);
+          window.removeEventListener("resize", scheduleSpotlightLayout, true);
+          window.removeEventListener("scroll", scheduleSpotlightLayout, true);
+        } catch (_) {}
+      }
+    };
+
+    try { log("warn","[SPOTLIGHT]","open", { id: state.spotlightId, severity, cat, score }); } catch (_) {}
+    return true;
   }
 
   // -----------------------------
@@ -736,6 +1056,16 @@ function openXSearch(q) {
     pageToken: 0,
     timer: 0,
     durationMs: 1200,
+    minDone: false,
+    gateToken: 0,
+    gateDeadlineTs: 0,
+    waiting: false,
+    _resolveAny: null,
+    _resolvePrompt: null,
+    anyReady: null,
+    promptReady: null,
+    _resolveBackend: null,
+    backendReady: null,
     startTs: 0
   };
 
@@ -765,77 +1095,152 @@ function openXSearch(q) {
 
 
 
+  
   function showLoader(kind, metaLeft) {
     const el = document.getElementById("follone-loader");
     if (!el) return;
 
     loader.kind = kind === "nav" ? "nav" : "boot";
     loader.shown = true;
+    loader.waiting = false;
+    loader.minDone = false;
 
-    // Time-based durations (ms)
-    loader.durationMs = loader.kind === "boot" ? 1600 : 1100;
+    // Time-based minimum duration (ms)
+    loader.durationMs = 5000;
     loader.startTs = Date.now();
 
-    // Reset
+    // Reset timers/raf
     if (loader.raf) cancelAnimationFrame(loader.raf);
     if (loader.timer) clearTimeout(loader.timer);
     loader.timer = 0;
 
     el.classList.add("show");
-    setLoaderBrand("Follone");
+    lockScroll(true, document.querySelector("main") || document.querySelector("[role='main']") || document.body.firstElementChild);
+    setLoaderBrand(loader.kind === "boot" ? "Follone" : "Now analyzing");
     setLoaderSubtitle(loader.kind === "boot" ? "起動中" : "Now analyzing");
     setLoaderQuote(loader.kind === "boot" ? "少しだけ…待ってて。" : "ちょい待ち。分析するね。");
 
     const left = document.getElementById("follone-loader-meta-left");
     if (left) left.textContent = metaLeft || (loader.kind === "boot" ? "startup" : "loading");
 
-    // Remaining-time bar (100% -> 0%)
-    setLoaderProgress(1);
+    // 0% -> 100% in durationMs
+    setLoaderProgress(0);
 
     const tick = () => {
       if (!loader.shown) return;
       const elapsed = Date.now() - loader.startTs;
-      const t = Math.max(0, Math.min(1, 1 - (elapsed / loader.durationMs)));
-      setLoaderProgress(t);
+      const p = Math.max(0, Math.min(1, (elapsed / loader.durationMs)));
+      setLoaderProgress(p);
 
-      if (t <= 0) {
-        hideLoader();
+      if (p >= 1 && !loader.minDone) {
+        loader.minDone = true;
+        // After minimum time, stay visible until gate is released (or max wait reached)
+        loader.waiting = true;
+        setLoaderSubtitle("初回解析中…");
+        setLoaderQuote("できるだけ早く返すね。");
+        // Stop animating at 100% to avoid wasting CPU
+        if (loader.raf) cancelAnimationFrame(loader.raf);
+        loader.raf = 0;
         return;
       }
       loader.raf = requestAnimationFrame(tick);
     };
 
     tick();
-    loader.timer = setTimeout(() => {
-      hideLoader();
-    }, loader.durationMs + 50);
   }
-
-  function setLoaderProgress(rem) {
+function setLoaderProgress(progress) {
     const bar = document.getElementById("follone-loader-bar");
     const right = document.getElementById("follone-loader-meta-right");
-    const pct = Math.max(0, Math.min(100, Math.round(Number(rem || 0) * 100)));
+    const pct = Math.max(0, Math.min(100, Math.round(Number(progress || 0) * 100)));
     if (bar) bar.style.width = `${pct}%`;
-    if (right) right.textContent = `残り${pct}%`;
+    if (right) right.textContent = `${pct}%`;
   }
 
+  
   function hideLoader() {
     const el = document.getElementById("follone-loader");
     if (!el) return;
     if (!loader.shown) return;
     loader.shown = false;
+    loader.waiting = false;
+    loader.minDone = false;
     if (loader.raf) cancelAnimationFrame(loader.raf);
     if (loader.timer) clearTimeout(loader.timer);
     loader.timer = 0;
-    // start at 100% remaining
-    setLoaderProgress(1);
+    // reset for next time
+    setLoaderProgress(0);
     setTimeout(() => {
       el.classList.remove("show");
       lockScroll(false);
     }, 260);
   }
 
-  /* v0.4.15: loader is time-based (no markFirstAnalysisDone) */
+  function resetLoaderGates() {
+    loader.gateToken = loader.pageToken;
+    loader.gateDeadlineTs = 0;
+
+    loader.anyReady = new Promise(res => { loader._resolveAny = res; });
+    loader.promptReady = new Promise(res => { loader._resolvePrompt = res; });
+    loader.backendReady = new Promise(res => { loader._resolveBackend = res; });
+  }
+
+  function signalAnyResult(payload) {
+    try { loader._resolveAny && loader._resolveAny(payload || true); } catch {}
+    loader._resolveAny = null;
+  }
+  function signalPromptResult(payload) {
+    try { loader._resolvePrompt && loader._resolvePrompt(payload || true); } catch {}
+    loader._resolvePrompt = null;
+  }
+  function signalBackendReady(payload) {
+    try { loader._resolveBackend && loader._resolveBackend(payload || true); } catch {}
+    loader._resolveBackend = null;
+  }
+
+  async function runLoaderGate(kind, metaLeft, opts) {
+    const o = Object.assign({ minMs: 5000, maxExtraMs: 9000, preferPrompt: true }, (opts || {}));
+    bumpPageToken();
+    resetLoaderGates();
+
+    showLoader(kind, metaLeft);
+
+    const token = loader.pageToken;
+    const start = Date.now();
+    loader.gateDeadlineTs = start + o.minMs + o.maxExtraMs;
+
+    // Kick warmup early to hide cold-start latency behind loader.
+    if (settings.enabled && settings.aiMode === "auto") {
+      ensureBackend(true).then(ok => {
+        if (ok) signalBackendReady({ ok: true });
+      }).catch(() => {});
+    }
+
+    // Head start: discover + analyze immediately
+    scheduleDiscovery(0);
+    scheduleAnalyze(0);
+
+    // Minimum time: always wait o.minMs
+    await new Promise(r => setTimeout(r, o.minMs));
+    if (loader.pageToken != token) return; // navigated away
+
+    // After minMs: wait for first prompt result (preferred) or any result, but never block forever.
+    const remaining = Math.max(0, loader.gateDeadlineTs - Date.now());
+    const timeout = new Promise(res => setTimeout(() => res({ timeout: true }), remaining));
+
+    let winner;
+    if (o.preferPrompt) {
+      winner = await Promise.race([loader.promptReady, loader.anyReady, timeout]);
+    } else {
+      winner = await Promise.race([loader.anyReady, timeout]);
+    }
+
+    if (loader.pageToken != token) return;
+    hideLoader();
+    scheduleHighlightFlush(0);
+    log("info","[LOADER]","gate release", { kind, winner, waitedMs: Date.now() - start });
+  }
+
+/* v0.4.15: loader is time-based (no markFirstAnalysisDone) */
 
 
   function bumpPageToken() {
@@ -852,13 +1257,11 @@ function openXSearch(q) {
     window.addEventListener("popstate", emit);
 
     window.addEventListener("follone:navigate", () => {
-      bumpPageToken();
-      showLoader("nav", `mode:${settings.aiMode}`);
-      // Clear per-page "intervened" so timeline changes can re-trigger on new elements.
+      // New page context
       state.intervenedIds = new Set();
-      // Give the analyzer a head start
-      scheduleDiscovery(0);
-      scheduleAnalyze(0);
+
+      // Time-based loader + small extra wait to hide cold-start. (Do not over-block on navigation.)
+      runLoaderGate("nav", `mode:${settings.aiMode}`, { minMs: 5000, maxExtraMs: 1500, preferPrompt: false });
     });
   }
 
@@ -940,6 +1343,37 @@ function openXSearch(q) {
       </div>
     `;
     document.documentElement.appendChild(ov);
+
+    // Spotlight intervention overlay (veil + side popover)
+    if (!document.getElementById("follone-spotlight")) {
+      const sp = document.createElement("div");
+      sp.id = "follone-spotlight";
+      sp.innerHTML = `
+        <div class="veil" id="follone-sp-top"></div>
+        <div class="veil" id="follone-sp-left"></div>
+        <div class="veil" id="follone-sp-right"></div>
+        <div class="veil" id="follone-sp-bottom"></div>
+        <div class="popover" id="follone-sp-pop">
+          <div class="ph">
+            <div class="avatar"></div>
+            <div>
+              <div class="title">follone</div>
+              <div class="sub" id="follone-sp-sub">介入</div>
+            </div>
+            <div class="badge" id="follone-sp-badge">注意</div>
+          </div>
+          <div class="pb">
+            <div id="follone-sp-text"></div>
+            <div class="muted" id="follone-sp-muted" style="margin-top:10px; opacity:0.85;"></div>
+          </div>
+          <div class="actions">
+            <button id="follone-sp-back">戻る</button>
+            <button id="follone-sp-search">検索へ</button>
+            <button id="follone-sp-continue">続ける</button>
+          </div>
+        </div>`;
+      document.documentElement.appendChild(sp);
+    }
 
     // Fullscreen loader (startup / navigation)
     if (!document.getElementById("follone-loader")) {
@@ -1083,6 +1517,27 @@ function openXSearch(q) {
       return true;
     }
 
+    // If user explicitly asked to start AI, warm up the backend session.
+    if (userInitiated) {
+      try {
+        const w = await sendMessageSafe({ type: "FOLLONE_BACKEND_WARMUP" });
+        if (w && w.ok) {
+          state.sessionStatus = "ready";
+          log("info","[BACKEND]","warmup complete", w);
+          signalBackendReady(w);
+          return true;
+        } else if (w) {
+          state.sessionStatus = String(w.status || "unavailable");
+          log("warn","[BACKEND]","warmup failed", w);
+          // fall through to status check
+        }
+      } catch (e) {
+        log("warn","[BACKEND]","warmup error", String(e));
+      }
+    }
+
+
+
     // auto: Ask SW/offscreen backend (extension origin) for status.
     try {
       const resp = await sendMessageSafe({ type: "FOLLONE_BACKEND_STATUS" });
@@ -1093,6 +1548,7 @@ function openXSearch(q) {
         if (a === "available" && (s === "ready" || resp.hasSession)) {
           state.sessionStatus = "ready";
           log("info","[BACKEND]","sw/offscreen ready", resp);
+          signalBackendReady(resp);
           return true;
         }
         if (a === "downloadable" || a === "downloading" || s === "downloadable" || s === "downloading") {
@@ -1106,7 +1562,10 @@ function openXSearch(q) {
           log("warn","[BACKEND]","Prompt API unavailable", resp);
           return true;
         }
+      } else if (resp) {
+        log("warn","[BACKEND]","backend status not ok", resp);
       }
+
     } catch (e) {
       log("warn","[BACKEND]","backend status failed", String(e));
     }
@@ -1116,7 +1575,15 @@ function openXSearch(q) {
     return true;
   }
 
-  // -----------------------------
+  
+  function truncateText(s, maxChars) {
+    const t = String(s || "");
+    const n = Math.max(0, Number(maxChars || 0));
+    if (!n || t.length <= n) return t;
+    return t.slice(0, n) + "…";
+  }
+
+// -----------------------------
   // Tweet extraction
   // -----------------------------
   function findTweetArticles() {
@@ -1156,6 +1623,8 @@ function openXSearch(q) {
     if (userNameEl) handle = (userNameEl.getAttribute("href") || "").replace("/", "").trim();
     const meta = `@${handle || "unknown"}`;
 
+    text = truncateText(text, settings.maxTextChars);
+
     return { id, text, meta, elem: article };
   }
 
@@ -1185,17 +1654,20 @@ function openXSearch(q) {
   }
 
   function makeSkipResult(id, reason) {
+    const tag = (reason === "media-only") ? "画像のみ"
+      : (reason === "short-text") ? "低情報量"
+      : (reason === "emoji-only") ? "絵文字のみ"
+      : "低情報量";
     return {
       id: String(id || ""),
       riskScore: 0,
       riskCategory: "なし",
       topicCategory: "その他",
-      summary: "",
-      explanation: `低リスク判定（${reason}）のため解析を省略しました。`,
-      suggestedSearches: [],
+      reasons: [tag],
       _source: "skip"
     };
   }
+
 
 
   // -----------------------------
@@ -1207,6 +1679,7 @@ function openXSearch(q) {
       properties: {
         results: {
           type: "array",
+          maxItems: 20,
           items: {
             type: "object",
             properties: {
@@ -1214,11 +1687,9 @@ function openXSearch(q) {
               riskScore: { type: "integer", minimum: 0, maximum: 100 },
               riskCategory: { type: "string", enum: RISK_ENUM },
               topicCategory: { type: "string", enum: topicList },
-              summary: { type: "string" },
-              explanation: { type: "string" },
-              suggestedSearches: { type: "array", maxItems: 3, items: { type: "string" } }
+              reasons: { type: "array", maxItems: 2, items: { type: "string", enum: REASON_ENUM } }
             },
-            required: ["id", "riskScore", "riskCategory", "topicCategory", "summary", "explanation", "suggestedSearches"],
+            required: ["id", "riskScore", "riskCategory", "topicCategory", "reasons"],
             additionalProperties: false
           }
         }
@@ -1231,14 +1702,13 @@ function openXSearch(q) {
   function buildClassifyPrompt(batch, topicList) {
     const persona = "あなたは「ふぉろね（follone）」です。少し気怠そうだがユーザーには優しく、介入時は説明重視。";
     const rules = [
-      "次のX投稿（複数）について「危険カテゴリ」「危険度」「トピックカテゴリ」を判定し、説明と安全な検索誘導を作る。",
+      "次のX投稿（複数）について「危険カテゴリ」「危険度」「トピックカテゴリ」を判定し、理由タグ（最大2つ）を選ぶ。",
       `危険カテゴリ: ${RISK_ENUM.join(" / ")}`,
       "危険度: 0〜100（高いほど危険）",
       `トピックカテゴリ: ${topicList.join(" / ")}`,
+      `理由タグ: ${REASON_ENUM.join(" / ")}（この中から最大2つ。自由記述は禁止）`,
       "制約: 出力はJSONのみ（responseConstraintに合致）。余計な文は出さない。",
-      "summary: 100文字目安。罵倒/差別語/露骨な性的表現をそのまま再掲せず、言い換える。",
-      "explanation: なぜ注意か、どう行動するとよいかを説明重視で。断定しすぎず可能性として述べる。",
-      "suggestedSearches: X内検索に使える安全で中立な語句を最大3つ。学習/検証/別視点を促す。"
+      "注意: 差別語/露骨な性的表現/誹謗中傷の文言は再掲しない。タグで表現する。"
     ].join("\n");
 
     const payload = batch.map(p => `ID:${p.id}\nTEXT:${p.text}\nMETA:${p.meta}`).join("\n\n---\n\n");
@@ -1339,21 +1809,19 @@ function openXSearch(q) {
       else topic = settings.topics[0] || "その他";
     }
 
-    const summary = sanitizeForSummary(t);
-    const explanation = riskCategory === "なし"
-      ? "大きな危険サインは薄め。気になる点があれば、一次情報や別ソースも見てね。"
-      : "断定はできないけど、刺激が強い/偏りやすい要素が見える。見続けるなら距離感を保って、別視点も混ぜて。";
-
-    const suggestedSearches = buildMockSearches(riskCategory);
-
+        const reasons = [];
+    if (riskCategory === "誹謗中傷") reasons.push("攻撃的な言い回し", "個人への非難");
+    else if (riskCategory === "政治") reasons.push("政治的煽動");
+    else if (riskCategory === "偏見") reasons.push("属性の一般化");
+    else if (riskCategory === "差別") reasons.push("差別的表現");
+    else if (riskCategory === "詐欺") reasons.push("金銭/誘導", "詐欺の可能性");
+    else if (riskCategory === "成人向け") reasons.push("性的示唆");
     return {
       id: String(post.id),
       riskScore: score,
       riskCategory,
       topicCategory: topic,
-      summary,
-      explanation,
-      suggestedSearches
+      reasons: reasons.slice(0, 2)
     };
   }
 
@@ -1393,8 +1861,15 @@ function openXSearch(q) {
           state.sessionStatus = "ready";
           log("info", "[AI]", "recv", { backend: resp.backend || "offscreen", engine: resp.engine || "prompt_api", status: resp.status, availability: resp.availability, latencyMs: resp.latencyMs || dt, n: resp.results.length });
 
+          state.lastLatencyMs = Number(resp.latencyMs || dt);
+          state.lastEngine = resp.engine || "prompt_api";
+          signalAnyResult({ engine: state.lastEngine, latencyMs: state.lastLatencyMs });
+          if ((resp.engine || "prompt_api") === "prompt_api") signalPromptResult({ latencyMs: state.lastLatencyMs });
           return resp.results;
+        } else if (resp) {
+          log("warn","[AI]","backend not ok -> mock", { status: resp.status, availability: resp.availability, engine: resp.engine, error: resp.error });
         }
+
         // If backend reports not-ready/unavailable, keep sessionStatus for UX, then fall back to mock.
         if (resp && resp.status) {
           state.sessionStatus = String(resp.status);
@@ -1405,6 +1880,7 @@ function openXSearch(q) {
     }
 
     // mock (no cost, always available)
+    signalAnyResult({ engine: "mock" });
     return classifyBatchMock(batch);
   }
 
@@ -1554,62 +2030,64 @@ function openXSearch(q) {
   }
 
   function showIntervention(elem, res) {
-    const ov = document.getElementById("follone-overlay");
-    const text = document.getElementById("follone-ov-text");
-    const badge = document.getElementById("follone-ov-badge");
-    const muted = document.getElementById("follone-ov-muted");
-    if (!ov || !text || !badge || !muted) return;
+    mountUI();
 
-    const score = Number(res.riskScore || 0);
-    const cat = String(res.riskCategory || "なし");
+    const score = Number(res?.riskScore || 0);
+    const cat = String(res?.riskCategory || "なし");
     const sev = severityFor(score);
 
-    badge.textContent = `${cat} / ${score}`;
-
-        const searches = pickOppositeQueries(cat, 3);
+    const searches = pickOppositeQueries(cat, 3);
     const searchLine = searches.length ? `検索候補: ${searches.map(s => `「${s}」`).join("、")}` : "検索候補:（なし）";
 
-    text.innerHTML = `
+    const reasons = Array.isArray(res?.reasons) ? res.reasons.slice(0, 2).map(x => String(x)) : [];
+    const reasonLine = reasons.length ? `理由: ${reasons.join(" / ")}` : "理由:（省略）";
+
+    const explain = (() => {
+      switch (cat) {
+        case "誹謗中傷": return "言葉が強くなりやすい流れかも。落ち着いて距離感を保とう。";
+        case "政治": return "政治系は熱が上がりやすい。一次情報と複数視点を混ぜてね。";
+        case "偏見": return "決めつけ/一般化が混ざりやすい。例外や文脈も見て判断しよう。";
+        case "差別": return "属性を理由にした断定や排除に注意。相手を人として扱える距離で。";
+        case "詐欺": return "誘導や金銭が絡む可能性。リンクやDM、個人情報は慎重に。";
+        case "成人向け": return "年齢により不適切な表現が含まれる可能性。必要なら回避しよう。";
+        default: return "刺激が強い/偏りやすい要素があるかも。無理せず切り替えてね。";
+      }
+    })();
+
+    const html = `
       <div style="font-weight:900; margin-bottom:8px;">…ちょい待って。ここ、気になる匂いがする。</div>
-      <div style="margin-bottom:10px;">${escapeHtml(res.explanation || "")}</div>
-      <div style="opacity:0.9; padding:10px 12px; border-radius:12px; background:rgba(255,255,255,0.08);">
-        <div style="font-weight:900;">要約</div>
-        <div style="margin-top:4px;">${escapeHtml(res.summary || "")}</div>
+      <div style="margin-bottom:10px;">${escapeHtml(explain)}</div>
+      <div style="opacity:0.95; padding:10px 12px; border-radius:12px; background:rgba(255,255,255,0.08);">
+        <div style="font-weight:900;">${escapeHtml(reasonLine)}</div>
       </div>
     `;
-    muted.textContent = `${searchLine}（誘導先はX内検索）`;
+    const muted = `${searchLine}（誘導先はX内検索）`;
 
-    const backBtn = document.getElementById("follone-ov-back");
-    const searchBtn = document.getElementById("follone-ov-search");
-    const contBtn = document.getElementById("follone-ov-continue");
-
-    const close = () => {
-      ov.style.display = "none";
-      lockScroll(false);
-    };
-
-    backBtn.onclick = () => {
-      elem.style.filter = "blur(8px)";
-      elem.style.pointerEvents = "none";
-      close();
-      addXp(xpForIntervention(sev));
-      window.scrollBy({ top: -Math.min(900, window.innerHeight), behavior: "smooth" });
-    };
-
-    searchBtn.onclick = () => {
-      close();
-      addXp(xpForIntervention(sev) + 2);
-      const q = searches[0] || "別の視点";
-      openXSearch(q);
-    };
-
-    contBtn.onclick = () => {
-      close();
-      addXp(1);
-    };
-
-    ov.style.display = "block";
-    if (sev === "hard") lockScroll(true);
+    const ok = openSpotlight({
+      elem,
+      id: res?.id,
+      severity: sev,
+      badgeText: `${cat} / ${score}`,
+      subText: `危険投稿の可能性（${sev === "hard" ? "強" : "中"}）`,
+      html,
+      muted,
+      searches,
+      cat,
+      score
+    });
+    if (!ok) {
+      // Fallback: legacy overlay
+      const ov = document.getElementById("follone-overlay");
+      const text = document.getElementById("follone-ov-text");
+      const badge = document.getElementById("follone-ov-badge");
+      const md = document.getElementById("follone-ov-muted");
+      if (!ov || !text || !badge || !md) return;
+      badge.textContent = `${cat} / ${score}`;
+      text.innerHTML = html;
+      md.textContent = muted;
+      ov.style.display = "block";
+      lockScroll(true, elem);
+    }
   }
 
   // -----------------------------
@@ -1738,11 +2216,28 @@ function openXSearch(q) {
 
     if (state.sessionStatus === "off") return;
 
+
+    // During startup loader, prefer waiting for Prompt backend instead of burning mock calls.
+    if (loader.shown && loader.kind === "boot" && settings.aiMode === "auto") {
+      const now = Date.now();
+      const canWait = (loader.gateDeadlineTs && now < loader.gateDeadlineTs);
+      if (canWait && state.sessionStatus !== "ready") {
+        log("debug","[AI]","waiting backend during loader", { status: state.sessionStatus });
+        scheduleAnalyze(120);
+        return;
+      }
+    }
+
     const backlog = state.analyzeHigh.length + state.analyzeLow.length;
     if (!backlog) return;
 
-    // Dynamic batch sizing: when backlog is large, use larger batches
-    const maxN = Math.min(8, Math.max(settings.batchSize, backlog > 30 ? settings.batchSize + 2 : settings.batchSize));
+    // Dynamic batch sizing
+    // - High priorityは小さめのバッチで「最初の結果」を早く返す（体感速度を上げる）
+    // - 低優先のみのときはスループット重視で大きめ
+    const slow = Number(state.lastLatencyMs || 0) > 6500;
+    const hasHigh = state.analyzeHigh.length > 0;
+    const maxN = hasHigh ? (slow ? 1 : Math.min(2, settings.batchSize))
+      : Math.min(8, Math.max(settings.batchSize, backlog > 30 ? settings.batchSize + 2 : settings.batchSize));
     const { batch, priority } = choosePriorityBatch(maxN);
     if (!batch.length) return;
 
@@ -1795,43 +2290,114 @@ function openXSearch(q) {
       const r = elem.getBoundingClientRect();
       const vh = window.innerHeight || document.documentElement.clientHeight;
       const vw = window.innerWidth || document.documentElement.clientWidth;
+      const eps = 1.5; // allow subpixel rounding
+      // Strict "fully in view"
+      if (r.top >= -eps && r.left >= -eps && r.bottom <= vh + eps && r.right <= vw + eps) return true;
+
+      // If the element is taller than viewport, it can never be fully visible.
+      // In that case, treat "fully visible" as "almost fully visible" (>= 0.98) to avoid dead states.
+      const area = Math.max(1, r.width * r.height);
       const visibleH = Math.max(0, Math.min(vh, r.bottom) - Math.max(0, r.top));
       const visibleW = Math.max(0, Math.min(vw, r.right) - Math.max(0, r.left));
-      const area = Math.max(1, r.width * r.height);
       const visArea = visibleH * visibleW;
-      return (visArea / area) >= 0.92;
+      return (visArea / area) >= 0.98;
     } catch (_) {
       return false;
     }
   }
 
-  function maybeApplyResultToElement(elem, res, ctx) {
-    const score = Number(res.riskScore || 0);
-    const cat = String(res.riskCategory || "なし");
-    const sev = severityFor(score);
+  
+  function isSafeCategory(cat) {
+    return cat === "なし" || cat === "問題なし";
+  }
 
-    // "スクロールが止まってから" 介入する（独自改善）
+  function scheduleHighlightFlush(delayMs) {
+    const d = Math.max(0, typeof delayMs === "number" ? delayMs : 0);
+    if (state.highlightFlushTimer) clearTimeout(state.highlightFlushTimer);
+    state.highlightFlushTimer = setTimeout(() => {
+      state.highlightFlushTimer = 0;
+      flushHighlightCandidates();
+    }, d);
+  }
+
+  function flushHighlightCandidates() {
+    // Wait until user stops scrolling for a short window
     if (Date.now() - state.lastScrollTs < 260) {
-      // Defer slightly
-      scheduleAnalyze(120);
+      scheduleHighlightFlush(260);
       return;
     }
 
-    if (cat !== "なし" && sev !== "none") {
-      if (state.intervenedIds.has(res.id)) return;
-      state.intervenedIds.add(res.id);
-
-      elem.classList.add("follone-danger");
-      state.riskCount += 1;
-      log("warn", "[INTERVENE]", "show", { id: res.id, cat, score, sev, backend: state.sessionStatus, from: ctx?.from || "unknown" });
-      showIntervention(elem, res);
-      addXp(xpForIntervention(sev));
+    if (state.pendingInterventions.size) {
+      log("info", "[HIGHLIGHT]", "flush", { pending: state.pendingInterventions.size, idleMs: Date.now() - state.lastScrollTs });
     }
+
+    // 1) Apply any queued interventions that are now fully visible
+    for (const [id, it] of Array.from(state.pendingInterventions.entries())) {
+      const elem = it?.elem;
+      const res = it?.res;
+      if (!elem || !res || !document.contains(elem)) {
+        state.pendingInterventions.delete(id);
+        continue;
+      }
+      if (!isFullyVisible(elem)) continue;
+      // Try applying again (now idle)
+      applyInterventionIfNeeded(elem, res, it?.ctx || { from: "flush" });
+      if (state.intervenedIds?.has?.(id)) state.pendingInterventions.delete(id);
+    }
+
+    // 2) Safety net: scan currently visible posts and apply highlights if needed
+    try {
+      const articles = findTweetArticles();
+      for (const a of articles) {
+        if (!isFullyVisible(a)) continue;
+        const id = a.dataset.folloneId;
+        if (!id) continue;
+        const res = state.riskCache.get(id);
+        if (!res) continue;
+        applyInterventionIfNeeded(a, res, { from: "scanVisible" });
+      }
+    } catch (_e) {}
   }
 
-// -----------------------------
-  // Inactive report suggestion
-  // -----------------------------
+  function applyInterventionIfNeeded(elem, res, ctx) {
+    const score = Number(res?.riskScore || 0);
+    const cat = String(res?.riskCategory || "なし");
+    const sev = severityFor(score);
+
+    if (isSafeCategory(cat) || sev === "none") return;
+    if (!isFullyVisible(elem)) return;
+
+    if (state.intervenedIds.has(res.id)) return;
+    state.intervenedIds.add(res.id);
+
+    elem.classList.add("follone-danger");
+    state.riskCount += 1;
+    log("warn", "[INTERVENE]", "show", { id: res.id, cat, score, backend: state.sessionStatus, from: ctx?.from || "unknown" });
+    showIntervention(elem, res);
+    addXp(xpForIntervention(sev));
+  }
+
+function maybeApplyResultToElement(elem, res, ctx) {
+    const score = Number(res?.riskScore || 0);
+    const cat = String(res?.riskCategory || "なし");
+    const sev = severityFor(score);
+
+    // Only intervene for non-safe categories and when score exceeds threshold.
+    if (isSafeCategory(cat) || sev === "none") return;
+
+    // Trigger condition: post must be fully visible.
+    if (!isFullyVisible(elem)) return;
+
+    // If user is scrolling, queue this intervention and retry once the scroll settles.
+    if (Date.now() - state.lastScrollTs < 260) {
+      state.pendingInterventions.set(res.id, { elem, res, ctx, ts: Date.now() });
+      scheduleHighlightFlush(280);
+      return;
+    }
+
+    applyInterventionIfNeeded(elem, res, ctx);
+  }
+
   function sessionSeconds() {
     return Math.floor((Date.now() - state.sessionStartMs) / 1000);
   }
@@ -1913,12 +2479,29 @@ function openXSearch(q) {
       }
     }, { root: null, threshold: 0.01, rootMargin: "3500px 0px 3500px 0px" });
 
+    // Warm observer: bumps priority shortly before the post becomes visible.
+    const warmIO = new IntersectionObserver((entries) => {
+      ensureRuntimeMaps();
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        const article = e.target;
+        const post = extractPostFromArticle(article);
+        if (post) {
+          enqueueForAnalysis(post, "high");
+          scheduleAnalyze(0);
+        }
+      }
+    }, { root: null, threshold: 0.01, rootMargin: "900px 0px 900px 0px" });
+
     // Highlight observer: triggers when post is almost fully visible.
     const highlightIO = new IntersectionObserver((entries) => {
       ensureRuntimeMaps();
       for (const e of entries) {
         const article = e.target;
         if (!e.isIntersecting) continue;
+
+        // When an element enters view, schedule a highlight flush once scroll settles
+        scheduleHighlightFlush(280);
 
         const id = article.dataset.folloneId;
         if (!id) {
@@ -1928,7 +2511,7 @@ function openXSearch(q) {
             enqueueForAnalysis(post, "high");
             scheduleAnalyze(0);
           }
-          article.classList.add("follone-analyzing");
+          /* v0.4.21: per-post analyzing badge removed */
           continue;
         }
 
@@ -1938,7 +2521,7 @@ function openXSearch(q) {
           maybeApplyResultToElement(article, res, { from: "highlightIO" });
         } else {
           // Not yet analyzed: show analyzing badge and prioritize this post now.
-          article.classList.add("follone-analyzing");
+          /* v0.4.21: per-post analyzing badge removed */
           // If we have the element mapped, create a tiny "priority bump"
           const post = extractPostFromArticle(article);
           if (post) {
@@ -1952,6 +2535,7 @@ function openXSearch(q) {
     function attachAll() {
       for (const a of findTweetArticles()) {
         prefetchIO.observe(a);
+        warmIO.observe(a);
         highlightIO.observe(a);
       }
     }
@@ -1964,6 +2548,7 @@ function openXSearch(q) {
     const onUserActivity = () => {
       state.lastScrollTs = Date.now();
       state.lastUserActivityTs = Date.now();
+      scheduleHighlightFlush(280);
     };
     window.addEventListener("scroll", onUserActivity, { passive: true });
     window.addEventListener("mousemove", onUserActivity, { passive: true });
@@ -2052,9 +2637,8 @@ function openXSearch(q) {
     } catch (e) {
       if (!isContextInvalidated(e)) log("warn","[SW]","ping failed", String(e));
     }
-    // Startup loader (time-based, always)
-    bumpPageToken();
-    showLoader("boot", `mode:${settings.aiMode}`);
+    // Startup loader: use time to cover cold-start analysis
+    runLoaderGate("boot", `mode:${settings.aiMode}`, { minMs: 5000, maxExtraMs: 9000, preferPrompt: true });
 
     startObservers();
 

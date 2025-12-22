@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "follone for X",
-  "version": "0.4.20",
-  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。SW→offscreen直返しでPrompt API安定化 + 分析ログ強化。",
+  "version": "0.4.33",
+  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。Spotlight介入（危険投稿のスポットライト＋スクロール停止＋横ポップアップ）。",
   "permissions": [
     "offscreen",
     "storage"

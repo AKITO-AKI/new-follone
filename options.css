@@ -1,19 +1,21 @@
-body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;margin:0;background:#0f0f10;color:#fff}
+/* v0.4.21 soft pink theme */
+:root{--f-pink:#ff4fa3;--f-pink2:#ff89c8;--f-ink:#2a2a2a;--f-border:rgba(255,79,163,0.22);} 
+body{font-family:system-ui,-apple-system,"Segoe UI",Roboto,"Noto Sans JP",sans-serif;margin:0;background:#fff;color:#2a2a2a}
 .wrap{max-width:860px;margin:0 auto;padding:20px}
 h1{font-size:22px;margin:0 0 12px 0}
-.card{background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:14px 14px 12px 14px;margin-top:12px}
+.card{background:rgba(255,79,163,0.06);border:1px solid rgba(255,255,255,0.12);border-radius:14px;padding:14px 14px 12px 14px;margin-top:12px}
 .card h2{font-size:15px;margin:0 0 10px 0;opacity:0.92}
 .row{display:flex;align-items:center;justify-content:space-between;gap:10px;margin:10px 0}
 .grid2{display:grid;grid-template-columns:1fr 1fr;gap:10px}
 label span{display:block;font-size:12px;opacity:0.85;margin-bottom:6px}
-input,textarea{width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:#fff;padding:10px}
+input,textarea{width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:#2a2a2a;padding:10px}
 textarea{resize:vertical}
 .footer{display:flex;align-items:center;gap:12px;margin-top:14px}
-button{appearance:none;border:0;border-radius:12px;padding:10px 14px;background:rgba(255,255,255,0.12);color:#fff;font-weight:800;cursor:pointer}
+button{appearance:none;border:0;border-radius:12px;padding:10px 14px;background:rgba(255,255,255,0.12);color:#2a2a2a;font-weight:800;cursor:pointer}
 button:hover{background:rgba(255,255,255,0.18)}
 #status{font-size:12px;opacity:0.8}
 
-select{width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:#fff;padding:10px}
+select{width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px solid rgba(255,255,255,0.12);border-radius:10px;color:#2a2a2a;padding:10px}
 
 
 .muted{font-size:12px;opacity:0.75;line-height:1.5}
@@ -24,7 +26,7 @@ select{width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px s
   border-radius:10px;
   border:1px solid rgba(255,255,255,0.12);
   background: rgba(255,255,255,0.08);
-  color:#fff;
+  color:#2a2a2a;
   cursor:pointer;
   font-weight:800;
 }
@@ -32,3 +34,11 @@ select{width:100%;box-sizing:border-box;background:rgba(0,0,0,0.35);border:1px s
   background: rgba(255, 80, 80, 0.18);
   border-color: rgba(255, 80, 80, 0.35);
 }
+
+
+button{border:1px solid var(--f-border);background:rgba(255,79,163,0.12);border-radius:12px;padding:10px 12px;font-weight:800;}
+button:hover{background:rgba(255,79,163,0.18);}
+input,select,textarea{border:1px solid var(--f-border);border-radius:12px;}
+
+/* v0.4.21: stronger pink buttons */
+button{border:1px solid rgba(255,79,163,0.30);background:linear-gradient(180deg, rgba(255,79,163,0.92), rgba(255,137,200,0.92));color:#fff;box-shadow:0 12px 26px rgba(255,79,163,0.18);}button:hover{filter:brightness(1.02);transform:translateY(-1px);} 

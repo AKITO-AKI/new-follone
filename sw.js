@@ -196,7 +196,23 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
       return;
     }
 
-    if (msg.type === "FOLLONE_BACKEND_STATUS") {
+    
+    if (msg.type === "FOLLONE_BACKEND_WARMUP") {
+      const ensured = await ensureOffscreen();
+      if (!ensured.ok) {
+        sendResponse({ ok: false, status: "unavailable", availability: "no_offscreen", error: ensured.error });
+        return;
+      }
+      const resp = await sendMessageP({ target: "offscreen", type: "FOLLONE_OFFSCREEN_WARMUP" });
+      if (!resp || !resp.ok) {
+        sendResponse({ ok: false, status: resp?.status || "unavailable", availability: resp?.availability || "error", error: resp?.error || "no_response" });
+        return;
+      }
+      sendResponse({ ok: true, status: resp.status || "ready", availability: resp.availability || "available", hasSession: Boolean(resp.hasSession) });
+      return;
+    }
+
+if (msg.type === "FOLLONE_BACKEND_STATUS") {
       const s = await getBackendStatus();
       // Normalize shape expected by content.js
       sendResponse({
