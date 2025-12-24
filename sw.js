@@ -6,10 +6,48 @@
 // - manages XP storage
 // - opens options page
 
-const OFFSCREEN_URL = chrome.runtime.getURL('offscreen.html');
+const OFFSCREEN_PATH = 'offscreen.html';
+const OFFSCREEN_URL = chrome.runtime.getURL(OFFSCREEN_PATH);
 const OFFSCREEN_REASON = (chrome.offscreen?.Reason?.DOM_PARSER) ?? 'DOM_PARSER';
 
 let ensuringOffscreenPromise = null;
+
+
+function sendMessageSafe(message, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve({ ok: false, error: 'timeout' });
+    }, timeoutMs);
+
+    try {
+      chrome.runtime.sendMessage(message, (resp) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const err = chrome.runtime.lastError;
+        if (err) return resolve({ ok: false, error: String(err) });
+        resolve(resp || { ok: false, error: 'no_response' });
+      });
+    } catch (e) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ ok: false, error: String(e) });
+    }
+  });
+}
+
+function timeoutForOffscreenPayload(payload) {
+  const t = String(payload?.type || '');
+  if (t === 'FOLLONE_BACKEND_STATUS') return 5000;
+  if (t === 'FOLLONE_BACKEND_WARMUP') return 90000;
+  if (t === 'FOLLONE_CLASSIFY_BATCH') return 30000;
+  return 15000;
+}
+
 
 async function hasOffscreenDoc() {
   try {
@@ -19,7 +57,7 @@ async function hasOffscreenDoc() {
   // Fallback: runtime.getContexts (Chrome 121+)
   try {
     if (chrome.runtime?.getContexts) {
-      const ctxs = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'] });
+      const ctxs = await chrome.runtime.getContexts({ contextTypes: ['OFFSCREEN_DOCUMENT'], documentUrls: [OFFSCREEN_URL] });
       return Array.isArray(ctxs) && ctxs.length > 0;
     }
   } catch (_) {}
@@ -35,7 +73,7 @@ async function ensureOffscreen() {
     const exists = await hasOffscreenDoc();
     if (!exists) {
       await chrome.offscreen.createDocument({
-        url: OFFSCREEN_URL,
+        url: OFFSCREEN_PATH,
         reasons: [OFFSCREEN_REASON],
         justification: 'Run Prompt API (LanguageModel) and JSON parsing.'
       });
@@ -67,7 +105,8 @@ async function forwardToOffscreen(payload) {
   if (!ensured.ok) return ensured;
 
   // Offscreen listens for messages with {to:'offscreen'}.
-  return await chrome.runtime.sendMessage({ ...payload, to: 'offscreen' });
+  const timeoutMs = timeoutForOffscreenPayload(payload);
+  return await sendMessageSafe({ ...payload, to: 'offscreen' }, timeoutMs);
 }
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {

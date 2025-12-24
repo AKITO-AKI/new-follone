@@ -1,12 +1,12 @@
 // follone content script (X / Twitter)
-// v0.4.35-a — Widget simplification + spotlight alignment + full navigation hooks
+// v0.4.36-a — Widget simplification + spotlight alignment + full navigation hooks
 'use strict';
 
 (() => {
   // -----------------------------
   // Constants / Config
   // -----------------------------
-  const VERSION = '0.4.35-a';
+  const VERSION = '0.4.36-a';
   const APP_NAME = 'follone';
 
   const RISK_ENUM = ['ok','light','medium','high','critical','violent','sexual','hate','scam'];

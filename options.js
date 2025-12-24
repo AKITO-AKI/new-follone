@@ -16,6 +16,33 @@ const STORAGE_KEYS = {
 function $(id) { return document.getElementById(id); }
 
 function clamp(n, lo, hi) { return Math.max(lo, Math.min(hi, n)); }
+function sendMessageSafe(message, timeoutMs = 15000) {
+  return new Promise((resolve) => {
+    let done = false;
+    const timer = setTimeout(() => {
+      if (done) return;
+      done = true;
+      resolve({ ok: false, error: 'timeout' });
+    }, timeoutMs);
+
+    try {
+      chrome.runtime.sendMessage(message, (resp) => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        const err = chrome.runtime.lastError;
+        if (err) return resolve({ ok: false, error: String(err) });
+        resolve(resp || { ok: false, error: 'no_response' });
+      });
+    } catch (e) {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      resolve({ ok: false, error: String(e) });
+    }
+  });
+}
+
 
 async function getAll() {
   const keys = Object.values(STORAGE_KEYS);
@@ -27,15 +54,26 @@ async function setOne(key, val) {
 }
 
 async function refreshDiag() {
-  const resp = await chrome.runtime.sendMessage({ type: 'FOLLONE_BACKEND_STATUS' });
-  $('avail').textContent = resp?.availability ?? '--';
-  $('status').textContent = resp?.status ?? '--';
-  $('hasSession').textContent = String(resp?.hasSession ?? '--');
-  $('lastError').textContent = resp?.lastError ? String(resp.lastError) : '--';
+  const resp = await sendMessageSafe({ type: 'FOLLONE_BACKEND_STATUS' }, 8000);
+
+  if (!resp || typeof resp !== 'object') {
+    $('avail').textContent = '--';
+    $('status').textContent = 'no_response';
+    $('hasSession').textContent = '--';
+    $('lastError').textContent = '--';
+    return;
+  }
+
+  // Prefer explicit backend payload fields; fall back to ok/error.
+  $('avail').textContent = resp.availability ?? '--';
+  $('status').textContent = resp.status ?? (resp.ok ? 'ok' : 'error');
+  $('hasSession').textContent = String(resp.hasSession ?? '--');
+  $('lastError').textContent = resp.lastError ? String(resp.lastError)
+    : (resp.ok ? '--' : String(resp.error || '--'));
 }
 
 async function warmup() {
-  const resp = await chrome.runtime.sendMessage({ type: 'FOLLONE_BACKEND_WARMUP' });
+  const resp = await sendMessageSafe({ type: 'FOLLONE_BACKEND_WARMUP' }, 120000);
   await refreshDiag();
   return resp;
 }

@@ -3,7 +3,7 @@
 
 'use strict';
 
-const VERSION = '0.4.35-a';
+const VERSION = '0.4.36-a';
 
 const RISK_ENUM = [
   'ok',
@@ -30,7 +30,31 @@ const LM_OPTIONS = {
   expectedOutputs: [
     { type: "text", languages: ["ja"] }
   ],
+
 };
+
+const OUTPUT_LANGUAGE = 'ja'; // MUST be specified per request to satisfy LanguageModel API warning
+const PROMPT_TIMEOUT_MS = 18000; // keep below content-script message timeout
+const CREATE_TIMEOUT_MS = 60000; // avoid infinite loading when create() hangs
+
+function withTimeout(promise, ms, label = 'timeout') {
+  let t;
+  const timeout = new Promise((_, reject) => {
+    t = setTimeout(() => reject(new Error(label)), ms);
+  });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t));
+}
+
+function isGenericLMFailure(err) {
+  const msg = String(err?.message || err || '');
+  const name = String(err?.name || '');
+  return (
+    /Other generic failures occurred/i.test(msg) ||
+    /generic failures occurred/i.test(msg) ||
+    /UnknownError/i.test(name) ||
+    /UnknownError/i.test(msg)
+  );
+}
 
 let session = null;
 let lastAvailability = 'unknown';
@@ -67,8 +91,10 @@ async function ensureSession() {
   if (session) return { ok: true, availability: avail, status: 'ready' };
 
   try {
-    session = await LanguageModel.create(LM_OPTIONS);
-    return { ok: true, availability: avail, status: 'ready' };
+    session = await withTimeout(LanguageModel.create(LM_OPTIONS), CREATE_TIMEOUT_MS, 'create_timeout');
+    // create() can change availability (e.g., trigger download). Refresh best-effort.
+    try { lastAvailability = await LanguageModel.availability(LM_OPTIONS); } catch (_) {}
+    return { ok: true, availability: lastAvailability || avail, status: 'ready' };
   } catch (e) {
     session = null;
     lastError = String(e);
@@ -183,45 +209,54 @@ function isProbablyTransientPromptError(err) {
 }
 
 async function promptWithFallback(prompt, schema) {
+  // Ensure session exists; recreate at most once per request on generic failures/timeouts.
   let recreated = false;
-  if (!session) throw new Error('No Prompt API session');
 
-  // Per Chrome docs, responseConstraint should be the JSON schema object directly.
-  // (Some early prototypes used wrappers; we support a small compatibility fallback below.)
-  const variants = [
-    { responseConstraint: schema, omitResponseConstraintInput: true },
-    { responseConstraint: schema },
-    // Last-resort: no schema constraint. We still request JSON-only output in the prompt.
-    {},
-  ];
+  while (true) {
+    const ses = await ensureSession();
+    if (!ses.ok || !session) {
+      throw new Error(ses?.error || 'No Prompt API session');
+    }
 
-  let last = null;
-  for (const opts of variants) {
-    try {
-      return await session.prompt(prompt, opts);
-    } catch (e) {
-      last = e;
-      lastError = String(e && (e.message || e) || e);
+    // Provide schema (preferred) but keep compatibility variants.
+    const variants = [
+      { responseConstraint: schema, omitResponseConstraintInput: true, outputLanguage: OUTPUT_LANGUAGE },
+      { responseConstraint: schema, outputLanguage: OUTPUT_LANGUAGE },
+      { outputLanguage: OUTPUT_LANGUAGE },
+    ];
 
-      // If the session became invalid or Chrome reports a generic failure,
-      // recreate the session once and retry the same variant.
-      if (!recreated && isGenericLMFailure(e)) {
-        recreated = true;
-        session = null;
-        const res = await ensureSession();
-        if (res && res.ok && session) {
-          try {
-            return await session.prompt(prompt, opts);
-          } catch (e2) {
-            last = e2;
-            lastError = String(e2 && (e2.message || e2) || e2);
-          }
+    let last = null;
+
+    for (const opts of variants) {
+      try {
+        return await withTimeout(session.prompt(prompt, opts), PROMPT_TIMEOUT_MS, 'timeout');
+      } catch (e) {
+        last = e;
+        lastError = String(e?.message || e || e);
+
+        const shouldRecover = /timeout/i.test(lastError) || isGenericLMFailure(e) || isProbablyTransientPromptError(e);
+
+        if (!recreated && shouldRecover) {
+          recreated = true;
+          // Hard reset session and retry from outer while-loop.
+          try { session = null; } catch (_) {}
+          continue;
         }
+        // Otherwise try next variant; if all variants fail, throw at the end.
       }
     }
+
+    // All variants failed.
+    if (recreated) {
+      throw last || new Error('Prompt failed');
+    }
+    // If we haven't recreated yet, do one session reset then retry.
+    recreated = true;
+    session = null;
   }
-  throw last || new Error('Prompt failed');
 }
+
+
 
 async function classifyBatch(batch, topicList) {
   const ses = await ensureSession();
