@@ -1020,6 +1020,8 @@ function openXSearch(q) {
     // Layout now + after next frame (popover dimensions stabilize)
     try { layoutSpotlight(elem); } catch (_) {}
     try { requestAnimationFrame(() => { if (state.spotlightOpen) layoutSpotlight(elem); }); } catch (_) {}
+    try { setTimeout(() => { if (state.spotlightOpen) layoutSpotlight(elem); }, 120); } catch (_) {}
+
 
     // Cleanup hook
     state.spotlightRestore = {
@@ -2268,12 +2270,10 @@ function setLoaderProgress(progress) {
         updateTopicStats(topic);
 
         // If this element is currently fully visible, apply decorations now
-        if (isFullyVisible(elem)) {
-          maybeApplyResultToElement(elem, r, { from: "analyzePump" });
-        } else {
-          // If it was marked analyzing, clear marker once we have a result
-          elem.classList.remove("follone-analyzing");
-        }
+                // Try applying now; if the post isn't visible enough yet, we'll catch it later via highlight flush.
+        elem.classList.remove("follone-analyzing");
+        maybeApplyResultToElement(elem, r, { from: "analyzePump" });
+
       }
       await maybeShowFilterBubble();
     } catch (e) {
@@ -2285,28 +2285,39 @@ function setLoaderProgress(progress) {
     }
   }
 
-  function isFullyVisible(elem) {
+    function getViewportCoverageRatio(elem) {
     try {
       const r = elem.getBoundingClientRect();
       const vh = window.innerHeight || document.documentElement.clientHeight;
       const vw = window.innerWidth || document.documentElement.clientWidth;
-      const eps = 1.5; // allow subpixel rounding
-      // Strict "fully in view"
-      if (r.top >= -eps && r.left >= -eps && r.bottom <= vh + eps && r.right <= vw + eps) return true;
 
-      // If the element is taller than viewport, it can never be fully visible.
-      // In that case, treat "fully visible" as "almost fully visible" (>= 0.98) to avoid dead states.
-      const area = Math.max(1, r.width * r.height);
       const visibleH = Math.max(0, Math.min(vh, r.bottom) - Math.max(0, r.top));
       const visibleW = Math.max(0, Math.min(vw, r.right) - Math.max(0, r.left));
       const visArea = visibleH * visibleW;
-      return (visArea / area) >= 0.98;
+
+      // 正規化：要素がビューポートより大きい場合でも「最大で見える面積」に対して比率を取る
+      // （r.width*r.height で割ると “絶対に1にならない” 死状態が起き得るため）
+      const effW = Math.max(1, Math.min(vw, Math.max(0, r.width)));
+      const effH = Math.max(1, Math.min(vh, Math.max(0, r.height)));
+      const effArea = effW * effH;
+
+      const ratio = effArea ? (visArea / effArea) : 0;
+      return Math.max(0, Math.min(1, ratio));
     } catch (_) {
-      return false;
+      return 0;
     }
   }
 
-  
+  function isFullyVisible(elem) {
+    // “ほぼ全部見えている” を正規化して判定（背の高い投稿でも死なない）
+    return getViewportCoverageRatio(elem) >= 0.98;
+  }
+
+  function isVisibleEnough(elem, minRatio) {
+    const min = typeof minRatio === "number" ? minRatio : 0.45;
+    return getViewportCoverageRatio(elem) >= min;
+  }
+
   function isSafeCategory(cat) {
     return cat === "なし" || cat === "問題なし";
   }
@@ -2339,7 +2350,8 @@ function setLoaderProgress(progress) {
         state.pendingInterventions.delete(id);
         continue;
       }
-      if (!isFullyVisible(elem)) continue;
+      if (!isVisibleEnough(elem, 0.45)) continue;
+
       // Try applying again (now idle)
       applyInterventionIfNeeded(elem, res, it?.ctx || { from: "flush" });
       if (state.intervenedIds?.has?.(id)) state.pendingInterventions.delete(id);
@@ -2349,7 +2361,7 @@ function setLoaderProgress(progress) {
     try {
       const articles = findTweetArticles();
       for (const a of articles) {
-        if (!isFullyVisible(a)) continue;
+        if (!isVisibleEnough(a, 0.45)) continue;
         const id = a.dataset.folloneId;
         if (!id) continue;
         const res = state.riskCache.get(id);
@@ -2365,7 +2377,8 @@ function setLoaderProgress(progress) {
     const sev = severityFor(score);
 
     if (isSafeCategory(cat) || sev === "none") return;
-    if (!isFullyVisible(elem)) return;
+    if (!isVisibleEnough(elem, 0.45)) return;
+
 
     if (state.intervenedIds.has(res.id)) return;
     state.intervenedIds.add(res.id);
@@ -2386,7 +2399,8 @@ function maybeApplyResultToElement(elem, res, ctx) {
     if (isSafeCategory(cat) || sev === "none") return;
 
     // Trigger condition: post must be fully visible.
-    if (!isFullyVisible(elem)) return;
+    if (!isVisibleEnough(elem, 0.45)) return;
+
 
     // If user is scrolling, queue this intervention and retry once the scroll settles.
     if (Date.now() - state.lastScrollTs < 260) {
@@ -2502,6 +2516,9 @@ function maybeApplyResultToElement(elem, res, ctx) {
 
         // When an element enters view, schedule a highlight flush once scroll settles
         scheduleHighlightFlush(280);
+        // Avoid heavy work / intervention until the post is reasonably in view (stabilizes spotlight position).
+        if (!isVisibleEnough(article, 0.45)) continue;
+
 
         const id = article.dataset.folloneId;
         if (!id) {
@@ -2530,7 +2547,8 @@ function maybeApplyResultToElement(elem, res, ctx) {
           }
         }
       }
-    }, { root: null, threshold: 0.92 });
+    }, { root: null, threshold: 0.01 });
+
 
     function attachAll() {
       for (const a of findTweetArticles()) {
@@ -2544,16 +2562,20 @@ function maybeApplyResultToElement(elem, res, ctx) {
     mo.observe(document.documentElement, { childList: true, subtree: true });
     attachAll();
 
-    // Scroll/user activity tracking
-    const onUserActivity = () => {
+        // Scroll/user activity tracking
+    const onScroll = () => {
       state.lastScrollTs = Date.now();
       state.lastUserActivityTs = Date.now();
       scheduleHighlightFlush(280);
     };
-    window.addEventListener("scroll", onUserActivity, { passive: true });
+    const onUserActivity = () => {
+      state.lastUserActivityTs = Date.now();
+    };
+    window.addEventListener("scroll", onScroll, { passive: true });
     window.addEventListener("mousemove", onUserActivity, { passive: true });
     window.addEventListener("keydown", onUserActivity, { passive: true });
     window.addEventListener("pointerdown", onUserActivity, { passive: true });
+
 
     // Inactive suggestion tick
     setInterval(maybeSuggestInactiveReport, 2000);
