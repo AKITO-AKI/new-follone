@@ -120,7 +120,7 @@ async function getBackendStatus() {
   return resp;
 }
 
-async function forwardClassify(requestId, batch, topicList, priority) {
+async function forwardClassify(requestId, batch, topicList, prefs) {
   const ensured = await ensureOffscreen();
   if (!ensured.ok) {
     chrome.runtime.sendMessage({
@@ -139,19 +139,21 @@ async function forwardClassify(requestId, batch, topicList, priority) {
   }
 
   // Fire-and-forget; offscreen posts result back to SW via runtime message.
+  // Legacy async path (not currently used by content.js). Keep aligned with offscreen direct handler.
   chrome.runtime.sendMessage({
     target: "offscreen",
-    type: "FOLLONE_OFFSCREEN_CLASSIFY",
+    type: "FOLLONE_OFFSCREEN_CLASSIFY_DIRECT",
     requestId,
     batch,
-    topicList
+    topicList,
+    prefs: (prefs && typeof prefs === "object") ? prefs : undefined
   }, () => {
     // ignore ack; lastError here is not actionable; timeout will cover it.
   });
 }
 
 
-async function classifyViaOffscreen(batch, topicList, priority) {
+async function classifyViaOffscreen(batch, topicList, prefs) {
   const ensured = await ensureOffscreen();
   if (!ensured.ok) {
     return { ok: false, backend: "offscreen", status: "unavailable", availability: "no_offscreen", engine: "none", latencyMs: 0, results: [], error: ensured.error };
@@ -163,7 +165,7 @@ async function classifyViaOffscreen(batch, topicList, priority) {
     type: "FOLLONE_OFFSCREEN_CLASSIFY_DIRECT",
     batch: Array.isArray(batch) ? batch : [],
     topicList: Array.isArray(topicList) ? topicList : [],
-    priority: priority === "high" ? "high" : "low"
+    prefs: (prefs && typeof prefs === "object") ? prefs : undefined
   });
   const dt = Date.now() - t0;
 
@@ -229,8 +231,8 @@ if (msg.type === "FOLLONE_BACKEND_STATUS") {
     if (msg.type === "FOLLONE_CLASSIFY_BATCH") {
       const batch = Array.isArray(msg.batch) ? msg.batch : [];
       const topicList = Array.isArray(msg.topicList) ? msg.topicList : [];
-      const priority = msg.priority || "low";
-      const resp = await classifyViaOffscreen(batch, topicList, priority);
+      const prefs = (msg.prefs && typeof msg.prefs === "object") ? msg.prefs : undefined;
+      const resp = await classifyViaOffscreen(batch, topicList, prefs);
       sendResponse(resp);
       return;
     }

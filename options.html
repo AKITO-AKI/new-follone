@@ -6,9 +6,16 @@
   <title>follone Options</title>
   <link rel="stylesheet" href="options.css">
 </head>
-<body>
+<body data-mode="user">
   <div class="wrap">
     <h1>follone Options</h1>
+
+  <div class="tabs">
+    <button id="tabUser" class="tab">ユーザー</button>
+    <button id="tabDev" class="tab">開発者</button>
+  </div>
+  <div class="hint">ユーザー: 必要最低限 / 開発者: 詳細設定・診断・デバッグ</div>
+
 
     <section class="card">
       <h2>基本</h2>
@@ -20,10 +27,9 @@
       <label>
         <span>AIモード</span>
         <select id="aiMode">
-          <option value="auto">auto（Prompt APIがあれば使用 / なければMock）</option>
-          <option value="mock">mock（簡易判定のみで常に動作）</option>
-          <option value="off">off（AI判定なし）</option>
-        </select>
+        <option value="auto">Prompt API（推奨）</option>
+        <option value="off">OFF（AI判定しない）</option>
+      </select>
       </label>
 
       <div class="grid2" style="margin-top:10px;">
@@ -148,7 +154,18 @@
       </div>
     </section>
 
-    <div class="footer">
+        <section class="card devonly">
+        <h2>開発者</h2>
+        <div class="grid">
+          <label class="row"><span>速度優先（Fast Prompt）</span><input type="checkbox" id="fastMode"></label>
+          <label class="row"><span>responseConstraintを使う（遅い）</span><input type="checkbox" id="useConstraint"></label>
+          <label class="row"><span>ハッシュキャッシュ無視（force LLM）</span><input type="checkbox" id="forceLLM"></label>
+          <label class="row"><span>投稿ID表示（マッピング用）</span><input type="checkbox" id="showPostIds"></label>
+        </div>
+        <div class="hint">force LLMは同文投稿でも必ずPrompt APIへ送る（挙動確認用）。</div>
+      </section>
+
+<div class="footer">
       <button id="save">保存</button>
       <span id="status"></span>
     </div>

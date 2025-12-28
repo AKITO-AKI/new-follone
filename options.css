@@ -42,3 +42,10 @@ input,select,textarea{border:1px solid var(--f-border);border-radius:12px;}
 
 /* v0.4.21: stronger pink buttons */
 button{border:1px solid rgba(255,79,163,0.30);background:linear-gradient(180deg, rgba(255,79,163,0.92), rgba(255,137,200,0.92));color:#fff;box-shadow:0 12px 26px rgba(255,79,163,0.18);}button:hover{filter:brightness(1.02);transform:translateY(-1px);} 
+
+
+.tabs{display:flex;gap:8px;margin:10px 0 6px;}
+.tab{padding:8px 12px;border-radius:10px;border:1px solid rgba(0,0,0,0.12);background:#fff;cursor:pointer;font-weight:600;}
+body[data-mode="user"] #tabUser, body[data-mode="dev"] #tabDev{background:rgba(0,0,0,0.06);}
+.hint{opacity:0.75;font-size:12px;margin-bottom:10px;}
+body[data-mode="user"] .devonly{display:none;}

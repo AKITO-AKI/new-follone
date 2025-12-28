@@ -36,7 +36,13 @@
     enabled: true,
     debug: true,
     logLevel: "info", // debug | info | warn | error
-    aiMode: "auto", // auto | mock | off
+    aiMode: "auto", // auto | off (mock disabled)
+    fastMode: true,            // speed-optimized prompt
+    useConstraint: false,      // use responseConstraint (slower)
+    forceLLM: false,           // ignore hash-cache hits (dev)
+    showPostIds: false,        // show mapping tag on timeline (dev)
+    uiMode: "user",            // user | dev (options UI only)
+    themeAccent: "#a855f7",      // accent (future: per character)
     riskSoft: 60,
     riskHard: 75,
     batchSize: 3,
@@ -63,7 +69,28 @@
     skipEmojiOnly: true
   };
 
-  async function loadSettings() {
+  
+
+// -----------------------------
+// Theme (accent hook for future character skins)
+// -----------------------------
+function hexToRgbCsv(hex) {
+  const h = String(hex || "").trim();
+  const m = h.match(/^#?([0-9a-fA-F]{6})$/);
+  if (!m) return null;
+  const v = m[1];
+  const r = parseInt(v.slice(0,2), 16);
+  const g = parseInt(v.slice(2,4), 16);
+  const b = parseInt(v.slice(4,6), 16);
+  return `${r},${g},${b}`;
+}
+function applyThemeAccent(hex) {
+  const rgb = hexToRgbCsv(hex) || "170,85,247";
+  try {
+    document.documentElement.style.setProperty("--follone-accent-rgb", rgb);
+  } catch (e) {}
+}
+async function loadSettings() {
     const cur = await chrome.storage.local.get([
       "follone_enabled",
       "follone_aiMode",
@@ -85,7 +112,13 @@
       "follone_logLevel",
       "follone_cacheMax",
       "follone_skipMediaOnly",
-      "follone_skipEmojiOnly"
+      "follone_skipEmojiOnly",
+      "follone_fastMode",
+      "follone_useConstraint",
+      "follone_forceLLM",
+      "follone_showPostIds",
+      "follone_uiMode",
+      "follone_themeAccent"
     ]);
 
     if (cur.follone_enabled !== undefined) settings.enabled = !!cur.follone_enabled;
@@ -339,7 +372,7 @@ function onContextInvalidated(err) {
   // -----------------------------
   // Persistent result cache (v0.4.11)
   // -----------------------------
-  const RESULT_CACHE_KEY_V2 = "follone_resultCache_v2";
+  const RESULT_CACHE_KEY_V2 = "follone_resultCache_v3"; // v0.4.34: schema fix invalidated old cache
   const RESULT_CACHE_KEY_V1 = "follone_resultCache_v1";
 
   function fnv1a32(str) {
@@ -566,7 +599,31 @@ function onContextInvalidated(err) {
     }, Math.max(250, settings.cachePersistMs || 700));
   }
 
-  function shrinkResultForCache(r) {
+  
+
+// -----------------------------
+// Result shape normalization (v0.4.34)
+// offscreen.js returns: { risk, score, topic, reasons }
+// content.js expects:  { riskCategory, riskScore, topicCategory, reasons }
+// -----------------------------
+function normalizeResultShape(r, meta) {
+  if (!r) return null;
+  const out = Object.assign({}, r);
+  out.id = String(out.id || "");
+  if (!out.id) return null;
+
+  if (out.riskScore === undefined && out.score !== undefined) out.riskScore = Number(out.score);
+  if (out.riskCategory === undefined && out.risk !== undefined) out.riskCategory = String(out.risk);
+  if (out.topicCategory === undefined && out.topic !== undefined) out.topicCategory = String(out.topic);
+
+  if (!Array.isArray(out.reasons)) out.reasons = [];
+  out.reasons = out.reasons.map(x => String(x)).filter(Boolean);
+
+  if (!out._source) out._source = (meta && meta.engine) ? String(meta.engine) : "ai";
+  if (!out._ts) out._ts = Date.now();
+  return out;
+}
+function shrinkResultForCache(r) {
     if (!r) return null;
     const reasons = Array.isArray(r.reasons) ? r.reasons.slice(0, 2).map(x => String(x)) : [];
     return {
@@ -917,6 +974,8 @@ function openXSearch(q) {
     // Close any existing spotlight
     try { closeSpotlight("reopen"); } catch (_) {}
 
+    setTask("highlighting");
+    try { scrollElementToCenter(elem, { behavior: "smooth" }); } catch (_) {}
     state.spotlightOpen = true;
     state.spotlightId = String(id || "");
     state.spotlightElem = elem;
@@ -1020,8 +1079,6 @@ function openXSearch(q) {
     // Layout now + after next frame (popover dimensions stabilize)
     try { layoutSpotlight(elem); } catch (_) {}
     try { requestAnimationFrame(() => { if (state.spotlightOpen) layoutSpotlight(elem); }); } catch (_) {}
-    try { setTimeout(() => { if (state.spotlightOpen) layoutSpotlight(elem); }, 120); } catch (_) {}
-
 
     // Cleanup hook
     state.spotlightRestore = {
@@ -1238,6 +1295,7 @@ function setLoaderProgress(progress) {
 
     if (loader.pageToken != token) return;
     hideLoader();
+    setTask("stand-by");
     scheduleHighlightFlush(0);
     log("info","[LOADER]","gate release", { kind, winner, waitedMs: Date.now() - start });
   }
@@ -1259,12 +1317,15 @@ function setLoaderProgress(progress) {
     window.addEventListener("popstate", emit);
 
     window.addEventListener("follone:navigate", () => {
+      // Skip explore pages
+      if (location.pathname.startsWith("/explore")) return;
       // New page context
       state.intervenedIds = new Set();
-
-      // Time-based loader + small extra wait to hide cold-start. (Do not over-block on navigation.)
-      runLoaderGate("nav", `mode:${settings.aiMode}`, { minMs: 5000, maxExtraMs: 1500, preferPrompt: false });
+      // Loader for every timeline navigation; prefer first AI recv (with bounded extra wait)
+      setTask("loading");
+      runLoaderGate("nav", `mode:${settings.aiMode}`, { minMs: 5000, maxExtraMs: 3000, preferPrompt: true });
     });
+
   }
 
 
@@ -1283,20 +1344,15 @@ function setLoaderProgress(progress) {
           <div class="avatar"></div>
           <div>
             <div class="title">follone</div>
-            <div class="sub" id="follone-sub">起動待ち</div>
+            <div class="sub" id="follone-sub">stand-by</div>
           </div>
         </div>
         <div class="body" id="follone-body">
-          こんにちは、ふぉろねだよ～。君と一緒に、タイムライン見ちゃお～。
           <div class="row">
-            <button id="follone-start">AI開始</button>
             <button id="follone-toggle">ON/OFF</button>
-          </div>
-          <div class="row">
             <button id="follone-options">設定</button>
-            <button id="follone-diagnose">診断</button>
           </div>
-          
+
           <div class="exp" id="follone-exp">
             <div class="expRow">
               <div id="follone-exp-label">EXP Lv 1</div>
@@ -1309,13 +1365,12 @@ function setLoaderProgress(progress) {
             <div class="dashTitle">視野ダッシュボード</div>
             <div class="dashRow"><span>偏り度</span><span id="follone-bubble-score">--</span></div>
             <div class="dashBarWrap"><div class="dashBar" id="follone-bubble-bar"></div></div>
-            <div class="dashSmall" id="follone-bubble-top">top: --</div>
-            <div class="dashSmall" id="follone-bubble-suggest">おすすめ: --</div>
-            <div class="row"><button id="follone-bubble-search">検索で広げる</button></div>
+            <div class="dashSub" id="follone-bubble-top">top: —</div>
+            <div class="dashSub" id="follone-bubble-suggest">おすすめ: —</div>
           </div>
 
           <div class="muted" id="follone-meta"></div>
-
+          <div class="taskbar" id="follone-taskbar">SYS: stand-by</div>
         </div>
       </div>
     `;
@@ -1395,13 +1450,6 @@ function setLoaderProgress(progress) {
       document.documentElement.appendChild(ld);
     }
 
-
-    w.querySelector("#follone-start").addEventListener("click", async () => {
-      await ensureBackend(true);
-      renderWidget();
-      scheduleAnalyze(0);
-    });
-
     w.querySelector("#follone-toggle").addEventListener("click", async () => {
       settings.enabled = !settings.enabled;
       await chrome.storage.local.set({ follone_enabled: settings.enabled });
@@ -1409,37 +1457,6 @@ function setLoaderProgress(progress) {
     });
 
     w.querySelector("#follone-options").addEventListener("click", () => openOptions());
-
-    w.querySelector("#follone-diagnose").addEventListener("click", async () => {
-      const meta = document.getElementById("follone-meta");
-      const parts = [];
-      parts.push(`aiMode:${settings.aiMode}`);
-      parts.push(`LanguageModel:${typeof LanguageModel}`);
-      if (typeof LanguageModel !== "undefined") {
-        try {
-          const a = await LanguageModel.availability(LM_OPTIONS);
-          parts.push(`availability:${a}`);
-        } catch (e) {
-          parts.push(`availability error:${String(e)}`);
-        }
-      }
-      parts.push(`userActivation:${navigator.userActivation?.isActive ? "active" : "inactive"}`);
-
-      try {
-        const b = await sendMessageSafe({ type: "FOLLONE_BACKEND_STATUS" });
-        if (b && b.ok) {
-          parts.push(`offscreen:${String(b.availability || "-")}/${String(b.status || "-")}`);
-        } else {
-          parts.push(`offscreen:na`);
-        }
-      } catch (e) {
-        if (isContextInvalidated(e)) onContextInvalidated(e);
-        parts.push(`offscreen:err`);
-      }
-
-      parts.push(`backend:${state.sessionStatus}`);
-      if (meta) meta.textContent = parts.join(" / ");
-    });
 
     // Dashboard action: widen perspective via X search
     w.querySelector("#follone-bubble-search")?.addEventListener("click", () => {
@@ -1457,6 +1474,48 @@ function setLoaderProgress(progress) {
     if (el) el.textContent = text;
   }
 
+  // -----------------------------
+  // Task ticker (small, game-like)
+  // -----------------------------
+  function setTask(label, detail) {
+    state.taskLabel = String(label || "stand-by");
+    const el = document.getElementById("follone-taskbar");
+    if (!el) return;
+    const d = detail ? ` ${String(detail)}` : "";
+    el.textContent = `SYS: ${state.taskLabel}${d}`;
+  }
+
+  function setError(code, detail) {
+    state.lastErrorCode = code ? String(code) : "";
+    state.lastErrorDetail = detail ? String(detail) : "";
+    if (state.lastErrorCode) {
+      setTask("ERROR", state.lastErrorCode);
+    }
+  }
+
+  function clearError() {
+    state.lastErrorCode = "";
+    state.lastErrorDetail = "";
+  }
+
+  // Dev helper: show a small post-id tag near the article (for mapping logs -> UI)
+  function maybeAttachIdTag(article, id) {
+    if (!settings.showPostIds) return;
+    if (!article || !id) return;
+    if (article.querySelector?.('.follone-idtag')) return;
+    const tag = document.createElement("div");
+    tag.className = "follone-idtag";
+    tag.textContent = id;
+    // Do not disturb layout: overlay inside article
+    try { article.style.position = article.style.position || "relative"; } catch (_) {}
+    tag.style.position = "absolute";
+    tag.style.right = "6px";
+    tag.style.bottom = "6px";
+    tag.style.zIndex = "9999";
+    article.appendChild(tag);
+  }
+
+
   function renderWidget() {
     const meta = document.getElementById("follone-meta");
     const enabled = settings.enabled ? "ON" : "OFF";
@@ -1464,17 +1523,22 @@ function setLoaderProgress(progress) {
 
     let backendLabel = state.sessionStatus;
     if (state.sessionStatus === "ready") backendLabel = "PromptAPI";
-    if (state.sessionStatus === "mock") backendLabel = "Mock";
-    if (state.sessionStatus === "off") backendLabel = "OFF";
+        if (state.sessionStatus === "off") backendLabel = "OFF";
     if (state.sessionStatus === "unavailable") backendLabel = "利用不可";
     if (state.sessionStatus === "downloadable") backendLabel = "DL待ち";
     if (state.sessionStatus === "downloading") backendLabel = "DL中";
 
-    let sub = `${enabled} / AI:${backendLabel} / mode:${settings.aiMode}`;
+    let sub = `${enabled} / AI:${backendLabel}`;
+    if (state.lastErrorCode) sub += ` / ERROR:${state.lastErrorCode}`;
     setSub(sub);
 
     if (meta) {
-      meta.textContent = `可視tweetのみ / batch:${settings.batchSize} / idle:${settings.idleMs}ms / session:${sec}s`;
+      const err = state.lastErrorCode ? ` / ${state.lastErrorCode}` : "";
+      let hint = "";
+      if (state.lastErrorCode === "WARMUP_REQUIRED") hint = " / 設定→Backend→WARMUP";
+      else if (state.lastErrorCode === "MODEL_DOWNLOADING") hint = " / モデルDL中…";
+      else if (state.lastErrorCode === "PROMPT_UNAVAILABLE") hint = " / Prompt API未使用(Chrome設定確認)";
+      meta.textContent = `batch:${settings.batchSize} / idle:${settings.idleMs}ms / session:${sec}s${err}${hint}`;
     }
 
     // EXP
@@ -1509,22 +1573,18 @@ function setLoaderProgress(progress) {
   async function ensureBackend(userInitiated) {
     log("debug","[BACKEND]","ensureBackend", { userInitiated, aiMode: settings.aiMode, status: state.sessionStatus });
 
-    if (settings.aiMode === "off") {
+    if (!settings.enabled || settings.aiMode === "off") {
       state.sessionStatus = "off";
       return false;
     }
-
-    if (settings.aiMode === "mock") {
-      state.sessionStatus = "mock";
-      return true;
-    }
-
     // If user explicitly asked to start AI, warm up the backend session.
     if (userInitiated) {
+      setTask("warm up");
       try {
         const w = await sendMessageSafe({ type: "FOLLONE_BACKEND_WARMUP" });
         if (w && w.ok) {
           state.sessionStatus = "ready";
+          clearError();
           log("info","[BACKEND]","warmup complete", w);
           signalBackendReady(w);
           return true;
@@ -1549,6 +1609,7 @@ function setLoaderProgress(progress) {
         const s = String(resp.status || "");
         if (a === "available" && (s === "ready" || resp.hasSession)) {
           state.sessionStatus = "ready";
+          clearError();
           log("info","[BACKEND]","sw/offscreen ready", resp);
           signalBackendReady(resp);
           return true;
@@ -1561,6 +1622,7 @@ function setLoaderProgress(progress) {
         }
         if (a === "unavailable" || s === "unavailable") {
           state.sessionStatus = "unavailable";
+        setError("PROMPT_UNAVAILABLE", "unavailable");
           log("warn","[BACKEND]","Prompt API unavailable", resp);
           return true;
         }
@@ -1841,35 +1903,41 @@ function setLoaderProgress(progress) {
     return batch.map(mockClassifyOne);
   }
 
-  async function classifyBatch(batch, priority) {
+  async function classifyBatch(batch) {
     if (settings.aiMode === "off") return [];
 
     // Try offscreen Prompt API backend first (extension origin).
     if (settings.aiMode === "auto") {
       try {
         const t0 = performance.now();
-        log("debug", "[AI]", "send->sw", { backend: "offscreen", n: batch.length, priority: priority || "low", chars: batch.reduce((acc, p) => acc + String(p?.text || "").length, 0) });
+        setTask("classing");
+        // NOTE: FIFO queue: no per-batch priority.
+        log("debug", "[AI]", "send->sw", { backend: "offscreen", n: batch.length, chars: batch.reduce((acc, p) => acc + String(p?.text || "").length, 0) });
         const resp = await sendMessageSafe({
           type: "FOLLONE_CLASSIFY_BATCH",
           batch,
           topicList: settings.topics,
-          priority: priority || "low"
-        });
+          prefs: { fastMode: settings.fastMode, useConstraint: settings.useConstraint },
+                  });
         const dt = Math.round(performance.now() - t0);
         if (!resp) {
           throw new Error("Extension context invalidated");
         }
         if (resp && resp.ok && Array.isArray(resp.results)) {
           state.sessionStatus = "ready";
+          clearError();
           log("info", "[AI]", "recv", { backend: resp.backend || "offscreen", engine: resp.engine || "prompt_api", status: resp.status, availability: resp.availability, latencyMs: resp.latencyMs || dt, n: resp.results.length });
 
           state.lastLatencyMs = Number(resp.latencyMs || dt);
           state.lastEngine = resp.engine || "prompt_api";
+          clearError();
+          setTask("stand-by");
           signalAnyResult({ engine: state.lastEngine, latencyMs: state.lastLatencyMs });
           if ((resp.engine || "prompt_api") === "prompt_api") signalPromptResult({ latencyMs: state.lastLatencyMs });
-          return resp.results;
+          return resp.results.map(r => normalizeResultShape(r, resp)).filter(Boolean);
         } else if (resp) {
-          log("warn","[AI]","backend not ok -> mock", { status: resp.status, availability: resp.availability, engine: resp.engine, error: resp.error });
+          setError("BACKEND_NOT_OK", String(resp?.status || resp?.availability || "unknown"));
+          log("warn","[AI]","backend not ok -> empty", { status: resp.status, availability: resp.availability, engine: resp.engine, error: resp.error });
         }
 
         // If backend reports not-ready/unavailable, keep sessionStatus for UX, then fall back to mock.
@@ -1877,13 +1945,14 @@ function setLoaderProgress(progress) {
           state.sessionStatus = String(resp.status);
         }
       } catch (e) {
-        log("warn","[CLASSIFY]","SW classify failed -> mock", String(e));
+        setError("SW_CLASSIFY_FAILED", String(e));
+        log("warn","[CLASSIFY]","SW classify failed -> empty", String(e));
       }
     }
 
-    // mock (no cost, always available)
-    signalAnyResult({ engine: "mock" });
-    return classifyBatchMock(batch);
+    // No mock fallback: Prompt API must be available. If not, return empty.
+    signalAnyResult({ engine: "none", error: "backend_unavailable" });
+    return [];
   }
 
   // -----------------------------
@@ -2095,26 +2164,33 @@ function setLoaderProgress(progress) {
   // -----------------------------
   // Processing loop
   // -----------------------------
-  function enqueueForAnalysis(post, priority) {
+  function enqueueForAnalysis(post) {
     ensureRuntimeMaps();
     if (!post || !post.id) return;
 
     // If we already have a result, no need to analyze.
-    if (state.riskCache.has(post.id)) return;
+    if (!settings.forceLLM && state.riskCache.has(post.id)) return;
 
-    // Reverse filter (low-risk skip)
+    // Stable ordering: top -> bottom (y asc), then enqueue sequence.
+    let y = 0;
+    try {
+      const r = post.elem?.getBoundingClientRect?.();
+      if (r) y = (window.scrollY || 0) + r.top;
+    } catch (_) {}
+
     const norm = normalizeForHash(post.text || "");
     const textHash = norm ? fnv1a32(norm) : "";
     if (textHash) setIdHash(post.id, textHash);
 
-    // Hash cache fast path (id-independent reuse)
-    if (textHash && !state.riskCache.has(post.id)) {
+    // Hash cache fast path (id-independent reuse) — disabled in dev forceLLM mode
+    if (!settings.forceLLM && textHash && !state.riskCache.has(post.id)) {
       const cached = state.hashCache.get(textHash);
       if (cached) {
         const res = { ...cached, id: post.id };
         state.riskCache.set(post.id, res);
         state.elemById.set(post.id, post.elem);
         try { post.elem.dataset.folloneId = post.id; } catch (_) {}
+        try { maybeAttachIdTag(post.elem, post.id); } catch (_) {}
         touchPersistentCache(post.id, shrinkResultForCache(res), textHash);
         log("debug", "[CACHE]", "hit(hash)", { id: post.id, h: textHash });
         return;
@@ -2122,32 +2198,20 @@ function setLoaderProgress(progress) {
     }
 
     const sk = shouldSkipAnalysis(post);
-    if (sk.skip) {
+    if (sk.skip && !settings.forceLLM) {
       const res = makeSkipResult(post.id, sk.reason);
       state.riskCache.set(post.id, res);
       touchPersistentCache(post.id, shrinkResultForCache(res), textHash);
       state.elemById.set(post.id, post.elem);
       try { post.elem.dataset.folloneId = post.id; } catch (_) {}
+      try { maybeAttachIdTag(post.elem, post.id); } catch (_) {}
       log("debug", "[SKIP]", sk.reason, { id: post.id });
       return;
     }
 
-    // Priority upgrade path: if already queued as low, allow bump to high.
-    const pr = (priority === "high") ? "high" : "low";
+    // Already queued/sent: do not enqueue twice (avoids infinite re-analysis)
     if (state.sentForAnalysis.has(post.id)) {
-      const cur = state.pendingPriority.get(post.id) || "low";
-      if (pr === "high" && cur !== "high") {
-        state.pendingPriority.set(post.id, "high");
-
-        // seq-based dedupe: newer copy wins
-        const seq = ++state.enqSeq;
-        state.seqById.set(post.id, seq);
-        const bumped = { ...post, seq };
-
-        state.analyzeHigh.unshift(bumped); // front-load
-        log("debug", "[QUEUE]", "upgrade->high", { id: post.id, seq });
-        scheduleAnalyze(0);
-      }
+      log("debug", "[QUEUE]", "skip(already_sent)", { id: post.id });
       return;
     }
 
@@ -2156,39 +2220,50 @@ function setLoaderProgress(progress) {
     const seq = ++state.enqSeq;
     state.seqById.set(post.id, seq);
     post.seq = seq;
-    state.pendingPriority.set(post.id, pr);
+    post.y = y;
     state.canceledIds.delete(post.id);
     state.elemById.set(post.id, post.elem);
     try { post.elem.dataset.folloneId = post.id; } catch (_) {}
+    try { maybeAttachIdTag(post.elem, post.id); } catch (_) {}
 
-    if (pr === "high") state.analyzeHigh.push(post);
-    else state.analyzeLow.push(post);
+    // Single FIFO queue (no priority)
+    state.analyzeLow.push(post);
+    state.analyzeHigh = [];
 
-    log("debug", "[QUEUE]", "enqueueForAnalysis", { id: post.id, pr, high: state.analyzeHigh.length, low: state.analyzeLow.length });
+    log("debug", "[QUEUE]", "enqueueForAnalysis", { id: post.id, seq, y, q: state.analyzeLow.length });
   }
 
 
+function choosePriorityBatch(maxN) {
+    ensureRuntimeMaps();
+    const max = Math.max(1, Number(maxN || 1));
 
-  function choosePriorityBatch(maxN) {
+    // Single queue: sort by y (top->bottom) then seq (oldest first)
+    const q = state.analyzeLow;
+    if (!q.length) return { batch: [] };
+
+    const sorted = q.slice().sort((a, b) => {
+      const ay = Number(a?.y || 0), by = Number(b?.y || 0);
+      if (ay !== by) return ay - by;
+      return Number(a?.seq || 0) - Number(b?.seq || 0);
+    });
+
     const batch = [];
-    while (batch.length < maxN && state.analyzeHigh.length) {
-      const p = state.analyzeHigh.shift();
-      if (!p) continue;
-      const current = state.seqById.get(p.id);
-      if (current && p.seq && p.seq !== current) continue;
+    const takeIds = new Set();
+    for (const p of sorted) {
+      if (batch.length >= max) break;
+      if (!p || !p.id) continue;
+      if (state.canceledIds.has(p.id)) continue;
       batch.push(p);
+      takeIds.add(p.id);
     }
-    while (batch.length < maxN && state.analyzeLow.length) {
-      const p = state.analyzeLow.shift();
-      if (!p) continue;
-      const current = state.seqById.get(p.id);
-      if (current && p.seq && p.seq !== current) continue;
-      batch.push(p);
-    }
-    const priority = batch.some(p => isNearViewport(p.elem)) ? "high" : (state.analyzeHigh.length ? "high" : "low");
-    return { batch, priority };
-  }
+    if (!batch.length) return { batch: [] };
 
+    state.analyzeLow = q.filter(p => !takeIds.has(p?.id));
+    state.analyzeHigh = [];
+
+    return { batch };
+  }
   function isNearViewport(elem) {
     try {
       const r = elem.getBoundingClientRect();
@@ -2230,23 +2305,21 @@ function setLoaderProgress(progress) {
       }
     }
 
-    const backlog = state.analyzeHigh.length + state.analyzeLow.length;
+    const backlog = state.analyzeLow.length;
     if (!backlog) return;
 
     // Dynamic batch sizing
     // - High priorityは小さめのバッチで「最初の結果」を早く返す（体感速度を上げる）
     // - 低優先のみのときはスループット重視で大きめ
     const slow = Number(state.lastLatencyMs || 0) > 6500;
-    const hasHigh = state.analyzeHigh.length > 0;
-    const maxN = hasHigh ? (slow ? 1 : Math.min(2, settings.batchSize))
-      : Math.min(8, Math.max(settings.batchSize, backlog > 30 ? settings.batchSize + 2 : settings.batchSize));
-    const { batch, priority } = choosePriorityBatch(maxN);
+    const maxN = slow ? 1 : Math.min(8, Math.max(1, settings.batchSize));
+    const { batch } = choosePriorityBatch(maxN);
     if (!batch.length) return;
 
     state.inFlight = true;
     try {
-      log("info", "[CLASSIFY]", "batch", batch.map(x => x.id), { priority, maxN, backlog });
-      const results = await classifyBatch(batch, priority);
+      log("info", "[CLASSIFY]", "batch", batch.map(x => x.id), { maxN, backlog });
+      const results = await classifyBatch(batch);
       log("info", "[CLASSIFY]", "results", results.map(x => ({ id: x.id, risk: x.riskScore, cat: x.riskCategory, topic: x.topicCategory })));
 
       if (results.length) /* time-based loader */
@@ -2270,10 +2343,12 @@ function setLoaderProgress(progress) {
         updateTopicStats(topic);
 
         // If this element is currently fully visible, apply decorations now
-                // Try applying now; if the post isn't visible enough yet, we'll catch it later via highlight flush.
-        elem.classList.remove("follone-analyzing");
-        maybeApplyResultToElement(elem, r, { from: "analyzePump" });
-
+        if (isFullyVisible(elem)) {
+          maybeApplyResultToElement(elem, r, { from: "analyzePump" });
+        } else {
+          // If it was marked analyzing, clear marker once we have a result
+          elem.classList.remove("follone-analyzing");
+        }
       }
       await maybeShowFilterBubble();
     } catch (e) {
@@ -2285,39 +2360,28 @@ function setLoaderProgress(progress) {
     }
   }
 
-    function getViewportCoverageRatio(elem) {
+  function isFullyVisible(elem) {
     try {
       const r = elem.getBoundingClientRect();
       const vh = window.innerHeight || document.documentElement.clientHeight;
       const vw = window.innerWidth || document.documentElement.clientWidth;
+      const eps = 1.5; // allow subpixel rounding
+      // Strict "fully in view"
+      if (r.top >= -eps && r.left >= -eps && r.bottom <= vh + eps && r.right <= vw + eps) return true;
 
+      // If the element is taller than viewport, it can never be fully visible.
+      // In that case, treat "fully visible" as "almost fully visible" (>= 0.98) to avoid dead states.
+      const area = Math.max(1, r.width * r.height);
       const visibleH = Math.max(0, Math.min(vh, r.bottom) - Math.max(0, r.top));
       const visibleW = Math.max(0, Math.min(vw, r.right) - Math.max(0, r.left));
       const visArea = visibleH * visibleW;
-
-      // 正規化：要素がビューポートより大きい場合でも「最大で見える面積」に対して比率を取る
-      // （r.width*r.height で割ると “絶対に1にならない” 死状態が起き得るため）
-      const effW = Math.max(1, Math.min(vw, Math.max(0, r.width)));
-      const effH = Math.max(1, Math.min(vh, Math.max(0, r.height)));
-      const effArea = effW * effH;
-
-      const ratio = effArea ? (visArea / effArea) : 0;
-      return Math.max(0, Math.min(1, ratio));
+      return (visArea / area) >= 0.98;
     } catch (_) {
-      return 0;
+      return false;
     }
   }
 
-  function isFullyVisible(elem) {
-    // “ほぼ全部見えている” を正規化して判定（背の高い投稿でも死なない）
-    return getViewportCoverageRatio(elem) >= 0.98;
-  }
-
-  function isVisibleEnough(elem, minRatio) {
-    const min = typeof minRatio === "number" ? minRatio : 0.45;
-    return getViewportCoverageRatio(elem) >= min;
-  }
-
+  
   function isSafeCategory(cat) {
     return cat === "なし" || cat === "問題なし";
   }
@@ -2330,6 +2394,33 @@ function setLoaderProgress(progress) {
       flushHighlightCandidates();
     }, d);
   }
+
+  function scrollElementToCenter(elem, opts) {
+    if (!elem || typeof elem.getBoundingClientRect !== "function") return;
+    const o = Object.assign({ behavior: "smooth", maxAdjust: 2 }, (opts || {}));
+    const doOnce = () => {
+      const r = elem.getBoundingClientRect();
+      const centerY = r.top + r.height / 2;
+      const targetY = window.innerHeight / 2;
+      const delta = centerY - targetY;
+      if (Math.abs(delta) < 6) return false;
+      try {
+        window.scrollBy({ top: delta, behavior: o.behavior });
+      } catch (_) {
+        window.scrollTo(0, (window.scrollY || 0) + delta);
+      }
+      return true;
+    };
+    let n = 0;
+    const step = () => {
+      if (n >= o.maxAdjust) return;
+      n++;
+      const moved = doOnce();
+      if (moved) requestAnimationFrame(() => setTimeout(step, 80));
+    };
+    requestAnimationFrame(step);
+  }
+
 
   function flushHighlightCandidates() {
     // Wait until user stops scrolling for a short window
@@ -2350,8 +2441,7 @@ function setLoaderProgress(progress) {
         state.pendingInterventions.delete(id);
         continue;
       }
-      if (!isVisibleEnough(elem, 0.45)) continue;
-
+      if (!isFullyVisible(elem)) continue;
       // Try applying again (now idle)
       applyInterventionIfNeeded(elem, res, it?.ctx || { from: "flush" });
       if (state.intervenedIds?.has?.(id)) state.pendingInterventions.delete(id);
@@ -2361,7 +2451,7 @@ function setLoaderProgress(progress) {
     try {
       const articles = findTweetArticles();
       for (const a of articles) {
-        if (!isVisibleEnough(a, 0.45)) continue;
+        if (!isFullyVisible(a)) continue;
         const id = a.dataset.folloneId;
         if (!id) continue;
         const res = state.riskCache.get(id);
@@ -2377,8 +2467,7 @@ function setLoaderProgress(progress) {
     const sev = severityFor(score);
 
     if (isSafeCategory(cat) || sev === "none") return;
-    if (!isVisibleEnough(elem, 0.45)) return;
-
+    if (!isFullyVisible(elem)) return;
 
     if (state.intervenedIds.has(res.id)) return;
     state.intervenedIds.add(res.id);
@@ -2399,8 +2488,7 @@ function maybeApplyResultToElement(elem, res, ctx) {
     if (isSafeCategory(cat) || sev === "none") return;
 
     // Trigger condition: post must be fully visible.
-    if (!isVisibleEnough(elem, 0.45)) return;
-
+    if (!isFullyVisible(elem)) return;
 
     // If user is scrolling, queue this intervention and retry once the scroll settles.
     if (Date.now() - state.lastScrollTs < 260) {
@@ -2516,9 +2604,6 @@ function maybeApplyResultToElement(elem, res, ctx) {
 
         // When an element enters view, schedule a highlight flush once scroll settles
         scheduleHighlightFlush(280);
-        // Avoid heavy work / intervention until the post is reasonably in view (stabilizes spotlight position).
-        if (!isVisibleEnough(article, 0.45)) continue;
-
 
         const id = article.dataset.folloneId;
         if (!id) {
@@ -2547,8 +2632,7 @@ function maybeApplyResultToElement(elem, res, ctx) {
           }
         }
       }
-    }, { root: null, threshold: 0.01 });
-
+    }, { root: null, threshold: 0.92 });
 
     function attachAll() {
       for (const a of findTweetArticles()) {
@@ -2562,20 +2646,16 @@ function maybeApplyResultToElement(elem, res, ctx) {
     mo.observe(document.documentElement, { childList: true, subtree: true });
     attachAll();
 
-        // Scroll/user activity tracking
-    const onScroll = () => {
+    // Scroll/user activity tracking
+    const onUserActivity = () => {
       state.lastScrollTs = Date.now();
       state.lastUserActivityTs = Date.now();
       scheduleHighlightFlush(280);
     };
-    const onUserActivity = () => {
-      state.lastUserActivityTs = Date.now();
-    };
-    window.addEventListener("scroll", onScroll, { passive: true });
+    window.addEventListener("scroll", onUserActivity, { passive: true });
     window.addEventListener("mousemove", onUserActivity, { passive: true });
     window.addEventListener("keydown", onUserActivity, { passive: true });
     window.addEventListener("pointerdown", onUserActivity, { passive: true });
-
 
     // Inactive suggestion tick
     setInterval(maybeSuggestInactiveReport, 2000);
@@ -2612,8 +2692,7 @@ function maybeApplyResultToElement(elem, res, ctx) {
       const post = extractPostFromArticle(article);
       if (!post) continue;
 
-      const pr = isNearViewport(article) ? "high" : "low";
-      enqueueForAnalysis(post, pr);
+      enqueueForAnalysis(post);
       done += 1;
     }
 
@@ -2660,14 +2739,17 @@ function maybeApplyResultToElement(elem, res, ctx) {
       if (!isContextInvalidated(e)) log("warn","[SW]","ping failed", String(e));
     }
     // Startup loader: use time to cover cold-start analysis
-    runLoaderGate("boot", `mode:${settings.aiMode}`, { minMs: 5000, maxExtraMs: 9000, preferPrompt: true });
+    if (!location.pathname.startsWith("/explore")) {
+      setTask("loading");
+      runLoaderGate("boot", `mode:${settings.aiMode}`, { minMs: 5000, maxExtraMs: 9000, preferPrompt: true });
+    }
 
     startObservers();
 
     // Initial backend status (no auto-download)
-    if (settings.aiMode === "off") {
+    if (!settings.enabled || settings.aiMode === "off") {
       state.sessionStatus = "off";
-    } else if (settings.aiMode === "mock") {
+    } else if (settings.aiMode === "auto" /* mock disabled */) { settings.aiMode = "auto";
       state.sessionStatus = "mock";
     } else {
       // auto

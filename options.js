@@ -16,7 +16,12 @@ const KEYMAP = {
   inactiveCooldownMs: "follone_inactiveCooldownMs",
   topics: "follone_topics",
   debug: "follone_debug",
-  logLevel: "follone_logLevel"
+  logLevel: "follone_logLevel",
+  uiMode: "follone_uiMode",
+  fastMode: "follone_fastMode",
+  useConstraint: "follone_useConstraint",
+  forceLLM: "follone_forceLLM",
+  showPostIds: "follone_showPostIds"
 };
 
 function $(id){ return document.getElementById(id); }
@@ -24,6 +29,9 @@ function $(id){ return document.getElementById(id); }
 async function load() {
   const keys = Object.values(KEYMAP);
   const cur = await chrome.storage.local.get(keys);
+  // Apply saved UI mode early
+  const savedMode = (cur.follone_uiMode === "dev") ? "dev" : "user";
+  document.body.dataset.mode = savedMode;
 
   $("enabled").checked = cur[KEYMAP.enabled] ?? true;
   $("aiMode").value = cur[KEYMAP.aiMode] ?? "auto";
@@ -46,6 +54,12 @@ async function load() {
 
   $("debug").checked = cur[KEYMAP.debug] ?? true;
   $("logLevel").value = cur[KEYMAP.logLevel] ?? "info";
+
+  // Dev toggles (safe if elements absent in user mode)
+  if ($("fastMode")) $("fastMode").checked = cur[KEYMAP.fastMode] ?? true;
+  if ($("useConstraint")) $("useConstraint").checked = cur[KEYMAP.useConstraint] ?? false;
+  if ($("forceLLM")) $("forceLLM").checked = cur[KEYMAP.forceLLM] ?? false;
+  if ($("showPostIds")) $("showPostIds").checked = cur[KEYMAP.showPostIds] ?? false;
 
   const topics = cur[KEYMAP.topics];
   const fallback = [
@@ -79,6 +93,15 @@ async function save() {
 
   out[KEYMAP.debug] = $("debug").checked;
   out[KEYMAP.logLevel] = $("logLevel").value;
+
+  // Dev toggles
+  if ($("fastMode")) out[KEYMAP.fastMode] = $("fastMode").checked;
+  if ($("useConstraint")) out[KEYMAP.useConstraint] = $("useConstraint").checked;
+  if ($("forceLLM")) out[KEYMAP.forceLLM] = $("forceLLM").checked;
+  if ($("showPostIds")) out[KEYMAP.showPostIds] = $("showPostIds").checked;
+
+  // UI mode (tabs)
+  out[KEYMAP.uiMode] = (document.body.dataset.mode === "dev") ? "dev" : "user";
 
   const lines = $("topics").value.split("\n").map(s => s.trim()).filter(Boolean);
   out[KEYMAP.topics] = lines.slice(0, 30);
@@ -188,7 +211,18 @@ async function warmupModel() {
 }
 
 
+
+function setMode(mode) {
+  const m = (mode === "dev") ? "dev" : "user";
+  document.body.dataset.mode = m;
+  // Persist
+  chrome.storage.local.set({ follone_uiMode: m });
+}
+
 document.addEventListener("DOMContentLoaded", () => {
+  $("#tabUser")?.addEventListener("click", () => setMode("user"));
+  $("#tabDev")?.addEventListener("click", () => setMode("dev"));
+
   load();
   $("save").addEventListener("click", save);
   if ($("warmup")) $("warmup").addEventListener("click", warmupModel);

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "follone for X",
-  "version": "0.4.33",
+  "version": "0.4.34",
   "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。Spotlight介入（危険投稿のスポットライト＋スクロール停止＋横ポップアップ）。",
   "permissions": [
     "offscreen",
