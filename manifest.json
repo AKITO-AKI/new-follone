@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "follone for X",
-  "version": "0.4.34",
-  "description": "Xのタイムライン補助（危険投稿介入・フィルターバブル検知・検索誘導・ミニレポート）。Spotlight介入（危険投稿のスポットライト＋スクロール停止＋横ポップアップ）。",
+  "name": "CanSee: Social Lens",
+  "version": "0.4.64",
+  "description": "SNSタイムラインを“Social Lens（社会的なレンズ）”として可視化し、偏り・危険サイン・介入理由を『なぜ？』まで説明できる学習支援ツール（X対応）。ローカル処理中心で、学校PCの授業・発表で回せます。",
   "permissions": [
     "offscreen",
     "storage"
@@ -22,6 +22,7 @@
         "https://twitter.com/*"
       ],
       "js": [
+        "pet/PetEngine.js",
         "content.js"
       ],
       "css": [
@@ -32,6 +33,20 @@
   ],
   "options_page": "options.html",
   "action": {
-    "default_title": "follone"
-  }
+    "default_title": "CanSee: Social Lens"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "assets/chars/*/*.png",
+        "pet/*.js",
+        "pet/data/characters/*.json",
+        "pet/data/accessories/*.json"
+      ],
+      "matches": [
+        "https://x.com/*",
+        "https://twitter.com/*"
+      ]
+    }
+  ]
 }

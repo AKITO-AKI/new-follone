@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ja">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TUTORIAL | follone for X</title>
+  <link rel="stylesheet" href="tutorial.css">
+</head>
+<body>
+  <div class="tWrap" id="tWrap">
+    <header class="tTop">
+      <div class="tBrand">
+        <div class="tKicker">TUTORIAL</div>
+        <div class="tSub">仮想タイムラインでSpotlightを体験</div>
+      </div>
+      <div class="tHud">
+        <div class="tChip"><span>LV</span><b id="hudLv">1</b></div>
+        <div class="tChip"><span>XP</span><b id="hudXp">0</b></div>
+        <div class="tChip"><span>+XP</span><b id="hudGain">0</b></div>
+      </div>
+    </header>
+
+    <main class="tMain">
+      <section class="tTimeline" aria-label="仮想タイムライン">
+        <div class="tTlHead">仮想タイムライン</div>
+        <article class="tPost" data-post="0">
+          <div class="tHandle">@example</div>
+          <div class="tBody">今日はまあまあ。落ち着いていこう。</div>
+        </article>
+        <article class="tPost" data-post="1" id="postHot">
+          <div class="tHandle">@noisy</div>
+          <div class="tBody">強い言葉が飛び交う話題。つい引きずられそう…</div>
+        </article>
+        <article class="tPost" data-post="2">
+          <div class="tHandle">@hobby</div>
+          <div class="tBody">作業BGMおすすめある？</div>
+        </article>
+      </section>
+
+      <aside class="tSide" aria-label="ガイド">
+        <!-- Character guide (tutorial-like overlay) -->
+        <div class="tGuide" id="guideCard" role="note" aria-label="ガイド">
+          <div class="tGuidePet">
+            <canvas id="guidePet" width="64" height="64" aria-label="キャラ"></canvas>
+          </div>
+          <div class="tBubble">
+            <div class="tChar" id="guideChar">ふぉろね</div>
+            <div class="tSay" id="guideText"></div>
+            <div class="tActions" id="guideActions"></div>
+          </div>
+        </div>
+
+        <div class="tCard tMuted" id="tipCard">
+          <div class="tTipTitle">ヒント</div>
+          <div class="tTipText">このページは練習用。実際のXには影響しません。</div>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <!-- Spotlight modal -->
+  <div class="tSpotVeil" id="spotVeil">
+    <div class="tSpot" role="dialog" aria-modal="true" aria-label="Spotlight">
+      <div class="tSpotTitle">Spotlight</div>
+      <div class="tSpotText" id="spotText">この投稿、感情が強くなりやすいかも。</div>
+      <div class="tSpotBtns">
+        <button type="button" id="spotBack">戻る</button>
+        <button type="button" id="spotSearch">検索する</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- PetEngine (for the guide avatar) -->
+  <script src="pet/PetEngine.js"></script>
+  <script src="tutorial.js"></script>
+</body>
+</html>

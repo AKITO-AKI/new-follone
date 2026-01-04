@@ -1,429 +1,1034 @@
-:root{--follone-accent-rgb:170,85,247;}
-/* follone overlay UI */
-#follone-widget {
-  --f-pink: rgb(var(--follone-accent-rgb));
-  --f-pink-2: #ff89c8;
-  --f-ink: #2a2a2a;
-  --f-card: rgba(255,255,255,0.96);
-  --f-border: rgba(var(--follone-accent-rgb),0.22);
-  --f-shadow: 0 18px 48px rgba(var(--follone-accent-rgb),0.18), 0 18px 48px rgba(0,0,0,0.12);
-  --f-soft: rgba(var(--follone-accent-rgb),0.10);
+/* follone overlay UI - latte CRT + character accent (token-driven, layered) */
+
+/* DotGothic16 (Google Fonts). If blocked by CSP, we fall back to monospace/system. */
+@import url('https://fonts.googleapis.com/css2?family=DotGothic16&display=swap');
+
+#follone-widget{
+  /* ---- Tokens (base) ---- */
+  --ui-body-0: #F6F1EA;
+  --ui-body-1: #EFE7DD;
+  --ui-body-2: #E7DDCF;
+  --ui-ink-0: #2A2723;
+  --ui-ink-1: #4A433B;
+  --ui-ink-2: #7A7065;
+  --ui-line: rgba(42,39,35,0.12);
+
+  /* Accent (overridden by data-skin) */
+  --ui-accent: #7B61FF;
+  --ui-accent-soft: rgba(123,97,255,0.35);
+  --ui-accent-glow: rgba(123,97,255,0.22);
+
+  /* Shadows / depth */
+  --shadow-outer: 0 10px 30px rgba(0,0,0,0.08);
+  --shadow-inset-1: inset 0 2px 2px rgba(255,255,255,0.65);
+  --shadow-inset-2: inset 0 -3px 6px rgba(0,0,0,0.12);
+  --bevel: inset 0 1px 0 rgba(255,255,255,0.55), inset 0 -1px 0 rgba(0,0,0,0.10);
+
+  /* CRT glass strengths (state overrides in CSS below) */
+  --glass-opacity: 0.36;
+  --glass-reflect: 0.20;
+  --glass-scanline: 0.08;
+  --glass-noise: 0.04;
+
+  /* Typography (dot-ish) */
+  --font-dot-ui: "DotGothic16", "Dot Gothic 16", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-dot-ticker: "DotGothic16", "Dot Gothic 16", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --fs-ui: 11px;
+  --fs-ticker-top: 12px;
+  --fs-ticker-bottom: 10.5px;
+  --lh-dot: 1.45;
+  --letter-dot: 0.08em;
+
+  /* Motion */
+  --t-fast: 120ms;
+  --t-mid: 220ms;
+  --t-slow: 420ms;
+  --delay-1: 0ms;
+  --delay-2: 80ms;
+  --delay-3: 160ms;
+  --ease-out: cubic-bezier(.16,1,.3,1);
+  --ease-soft: cubic-bezier(.2,.8,.2,1);
 
   position: fixed;
   right: 18px;
   bottom: 18px;
   z-index: 2147483647;
-  font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Noto Sans JP", sans-serif;
-}
-#follone-widget .panel {
-  width: 310px;
-  border-radius: 18px;
-  background: var(--f-card);
-  color: var(--f-ink);
-  box-shadow: var(--f-shadow);
-  overflow: hidden;
-  border: 1px solid var(--f-border);
-}
-#follone-widget .header {
-  padding: 12px 12px 10px 12px;
-  display: flex;
-  gap: 10px;
-  align-items: center;
-  border-bottom: 1px solid var(--f-border);
-}
-#follone-widget .avatar {
-  width: 34px;
-  height: 34px;
-  border-radius: 999px;
-  background: radial-gradient(circle at 30% 30%, rgba(255,255,255,0.9), rgba(255,255,255,0.1));
-  opacity: 0.9;
-}
-#follone-widget .title { font-weight: 800; letter-spacing: 0.2px; }
-#follone-widget .sub { font-size: 12px; opacity: 0.82; margin-top: 2px; }
-#follone-widget .body { padding: 12px; font-size: 13px; line-height: 1.45; }
-#follone-widget .muted { opacity: 0.8; font-size: 12px; margin-top: 10px; }
-#follone-widget button {
-  appearance: none;
-  border: 1px solid rgba(var(--follone-accent-rgb),0.30);
-  background: linear-gradient(180deg, rgba(var(--follone-accent-rgb),0.92), rgba(255,137,200,0.92));
-  color: #fff;
-  border-radius: 14px;
-  padding: 10px 12px;
-  font-weight: 900;
-  cursor: pointer;
-  box-shadow: 0 12px 26px rgba(var(--follone-accent-rgb),0.18);
-  transition: transform 120ms ease, box-shadow 120ms ease, filter 120ms ease;
-}
-#follone-widget button:hover {
-  transform: translateY(-1px);
-  box-shadow: 0 16px 34px rgba(var(--follone-accent-rgb),0.22);
-  filter: brightness(1.02);
+  width: 344px;
+  color: var(--ui-ink-0);
+  font-family: "DotGothic16", "Dot Gothic 16", system-ui, -apple-system, "Segoe UI", "Hiragino Sans", "Noto Sans JP", sans-serif;
+  -webkit-font-smoothing: antialiased;
 }
 
-#follone-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2147483646;
-  display: none;
-  background: rgba(255, 192, 220, 0.30);
-  backdrop-filter: blur(3px);
+/* Skin mapping */
+#follone-widget[data-skin="forone"]{
+  --ui-accent: #7B61FF;
+  --ui-accent-soft: rgba(123,97,255,0.35);
+  --ui-accent-glow: rgba(123,97,255,0.22);
 }
-#follone-overlay .card {
-  width: min(760px, calc(100vw - 28px));
-  margin: 12vh auto 0 auto;
-  border-radius: 16px;
-  background: rgba(20, 20, 22, 0.96);
-  color: var(--f-ink);
-  border: 1px solid var(--f-border);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
+#follone-widget[data-skin="likoris"]{
+  --ui-accent: #FD6B98;
+  --ui-accent-soft: rgba(253,107,152,0.35);
+  --ui-accent-glow: rgba(253,107,152,0.22);
+}
+
+#follone-widget *{ box-sizing: border-box; }
+
+/* ---- Device shell ---- */
+#follone-widget .device{ position: relative; }
+
+#follone-widget .deviceBody{
+  position: relative;
+  border-radius: 20px;
+  background: linear-gradient(180deg, var(--ui-body-0), var(--ui-body-1));
+  box-shadow: var(--shadow-outer);
+  border: 1px solid rgba(42,39,35,0.10);
   overflow: hidden;
 }
-#follone-overlay .cardHeader {
-  padding: 14px 14px 12px 14px;
-  border-bottom: 1px solid rgba(255,255,255,0.10);
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-#follone-overlay .cardBody {
-  padding: 14px;
-  font-size: 14px;
-  line-height: 1.55;
-}
-#follone-overlay .badge {
-  display: inline-block;
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 90, 90, 0.18);
-  border: 1px solid rgba(255, 90, 90, 0.35);
-  margin-left: auto;
-}
 
-#follone-overlay button {
-  appearance:none;
-  border: 1px solid rgba(var(--follone-accent-rgb),0.30);
-  background: linear-gradient(180deg, rgba(var(--follone-accent-rgb),0.92), rgba(255,137,200,0.92));
-  color:#fff;
-  border-radius: 14px;
-  padding: 12px 14px;
-  font-weight: 900;
-  cursor:pointer;
-  box-shadow: 0 14px 34px rgba(var(--follone-accent-rgb),0.18);
-}
-#follone-overlay button:hover{filter:brightness(1.02);transform:translateY(-1px);}
-#follone-overlay .actions {
-  padding: 14px;
-  border-top: 1px solid var(--f-border);
-  display: flex;
-  gap: 10px;
-}
-#follone-overlay .actions button { flex: 1; }
-
-
-/* -------- follone v0.4.9: loader + analyzing badge -------- */
-#follone-loader {
-  position: fixed;
-  inset: 0;
-  z-index: 2147483646;
-  display: none;
-  align-items: center;
-  justify-content: center;
-  background: radial-gradient(1200px 900px at 50% 30%, rgba(var(--follone-accent-rgb),0.14), rgba(255,255,255,0.85));
-  backdrop-filter: blur(10px);
-}
-#follone-loader.show { display: flex; }
-#follone-loader .box {
-  width: min(720px, 92vw);
-  padding: 22px 22px 18px;
-  border-radius: 18px;
-  border: 1px solid var(--f-border);
-  background: rgba(255,255,255,0.75);
-  box-shadow: 0 22px 70px rgba(var(--follone-accent-rgb),0.20), 0 22px 70px rgba(0,0,0,0.12);
-}
-#follone-loader .brand {
-  color: var(--f-pink);
-  font-weight: 950;
-  letter-spacing: 0.08em;
-  font-size: 38px;
-  line-height: 1.1;
-  margin-bottom: 10px;
-}
-#follone-loader .brand .ch {
-  display: inline-block;
-  opacity: 0;
-  transform: translateY(10px);
-  animation: follone-pop 600ms ease forwards;
-}
-@keyframes follone-pop {
-  to { opacity: 1; transform: translateY(0); }
-}
-#follone-loader .subtitle {
-  opacity: 0.9;
-  margin-top: 8px;
-  font-weight: 700;
-}
-#follone-loader .quote {
-  margin-top: 10px;
-  opacity: 0.82;
-  font-size: 14px;
-  line-height: 1.6;
-}
-#follone-loader .progressWrap {
-  margin-top: 16px;
-  height: 10px;
-  border-radius: 999px;
-  border: 1px solid var(--f-border);
-  background: rgba(var(--follone-accent-rgb),0.10);
-  overflow: hidden;
-}
-#follone-loader .progressBar {
-  height: 100%;
-  width: 0%;
-  border-radius: 999px;
-  background: rgba(var(--follone-accent-rgb),0.85);
-  transition: width 240ms linear;
-}
-#follone-loader .meta {
-  margin-top: 10px;
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-  font-size: 12px;
-  opacity: 0.78;
-}
-#follone-loader .pill {
-  padding: 6px 10px;
-  border-radius: 999px;
-  border: 1px solid var(--f-border);
-  background: rgba(0,0,0,0.28);
-}
-
-.follone-analyzing{ outline: none !important; position: relative; }
-.follone-analyzing::after{ content:""; display:none !important; }
-
-
-/* Widget: EXP + dashboard */
-#follone-widget .exp {
-  margin-top: 10px;
-  padding: 10px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.06);
-  border: 1px solid rgba(255,255,255,0.10);
-}
-#follone-widget .expRow {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  font-size: 12px;
-  opacity: 0.95;
-  margin-bottom: 8px;
-}
-#follone-widget .expBarWrap {
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.10);
-  overflow: hidden;
-}
-#follone-widget .expBar {
-  height: 100%;
-  width: 0%;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.85);
-}
-
-#follone-widget .dash {
-  margin-top: 10px;
-  padding: 10px;
-  border-radius: 12px;
-  background: rgba(255,255,255,0.04);
-  border: 1px solid rgba(255,255,255,0.10);
-}
-
-/* -------- follone v0.4.32: spotlight intervention -------- */
-#follone-spotlight {
-  position: fixed;
-  inset: 0;
-  z-index: 2147483646;
-  display: none;
-  pointer-events: none; /* veils + popover will handle interactions */
-}
-#follone-spotlight.show { display: block; }
-
-#follone-spotlight .veil {
-  position: fixed;
-  background: rgba(255, 192, 220, 0.30);
-  backdrop-filter: blur(2px);
-  pointer-events: auto;
-}
-
-#follone-spotlight .popover {
-  position: fixed;
-  width: min(380px, calc(100vw - 28px));
-  max-height: min(70vh, 560px);
-  overflow: auto;
-  border-radius: 16px;
-  background: rgba(20, 20, 22, 0.96);
-  color: #fff;
-  border: 1px solid rgba(var(--follone-accent-rgb),0.30);
-  box-shadow: 0 20px 60px rgba(0,0,0,0.45);
-  pointer-events: auto;
-}
-#follone-spotlight .popover .ph {
-  padding: 12px 12px 10px 12px;
-  border-bottom: 1px solid rgba(255,255,255,0.10);
-  display: flex;
-  gap: 10px;
-  align-items: center;
-}
-#follone-spotlight .popover .pb {
+/* Inset screen area (embedded) */
+#follone-widget .deviceInset{
+  position: relative;
   padding: 12px;
-  font-size: 14px;
-  line-height: 1.55;
-}
-#follone-spotlight .popover .badge {
-  display: inline-block;
-  font-size: 12px;
-  padding: 6px 10px;
-  border-radius: 999px;
-  background: rgba(255, 90, 90, 0.18);
-  border: 1px solid rgba(255, 90, 90, 0.35);
-  margin-left: auto;
-}
-#follone-spotlight .popover .actions {
-  padding: 12px;
-  border-top: 1px solid rgba(255,255,255,0.10);
-  display: flex;
-  gap: 10px;
-}
-#follone-spotlight .popover .actions button {
-  flex: 1;
-  appearance:none;
-  border: 1px solid rgba(var(--follone-accent-rgb),0.30);
-  background: linear-gradient(180deg, rgba(var(--follone-accent-rgb),0.92), rgba(255,137,200,0.92));
-  color:#fff;
-  border-radius: 14px;
-  padding: 12px 14px;
-  font-weight: 900;
-  cursor:pointer;
-  box-shadow: 0 14px 34px rgba(var(--follone-accent-rgb),0.18);
-}
-#follone-spotlight .popover .actions button:hover{filter:brightness(1.02);transform:translateY(-1px);}
-
-.follone-spotlight-target {
-  outline: 3px solid rgba(var(--follone-accent-rgb),0.85) !important;
-  border-radius: 14px;
-  box-shadow: 0 18px 70px rgba(var(--follone-accent-rgb),0.28);
+  border-radius: 18px;
+  margin: 10px;
+  background: rgba(255,255,255,0.48);
+  border: 1px solid rgba(42,39,35,0.10);
+  box-shadow: var(--shadow-inset-1), var(--shadow-inset-2);
+  backdrop-filter: blur(6px);
 }
 
-.follone-target-badge {
+/* Glass layer (CRT) */
+#follone-widget .glassLayer{
   position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: var(--glass-opacity);
+  background:
+    radial-gradient(180px 120px at 20% 0%, rgba(255,255,255,var(--glass-reflect)), transparent 65%),
+    radial-gradient(220px 140px at 90% 10%, rgba(255,255,255,calc(var(--glass-reflect) * 0.75)), transparent 70%),
+    repeating-linear-gradient(180deg, rgba(0,0,0,var(--glass-scanline)) 0px, rgba(0,0,0,var(--glass-scanline)) 1px, rgba(0,0,0,0) 3px, rgba(0,0,0,0) 6px);
+}
+
+/* Noise grain */
+#follone-widget .glassLayer::after{
+  content:"";
+  position:absolute; inset:0;
+  background:
+    radial-gradient(rgba(42,39,35,var(--glass-noise)) 1px, transparent 1px);
+  background-size: 3px 3px;
+  opacity: 0.7;
+}
+
+/* Accent FX */
+#follone-widget .fxLayer{
+  position:absolute; inset:0;
+  pointer-events:none;
+  background:
+    radial-gradient(260px 160px at 26% 6%, var(--ui-accent-glow), transparent 60%),
+    radial-gradient(260px 160px at 74% 0%, rgba(255,255,255,0.18), transparent 65%);
+  opacity: 0.55;
+  mix-blend-mode: screen;
+}
+
+/* ---- Stage ---- */
+#follone-widget .stage{
+  display: grid;
+  grid-template-columns: 96px 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 8px;
+  border-radius: 16px;
+  background: rgba(255,255,255,0.45);
+  border: 1px solid rgba(42,39,35,0.10);
+  box-shadow: var(--bevel);
+}
+
+#follone-widget .petWrap{ position: relative; }
+#follone-widget .avatar{
+  width: 88px;
+  height: 88px;
+  border-radius: 18px;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(42,39,35,0.10);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.75);
+  overflow:hidden;
+}
+
+/* subtle floor shadow under pet */
+#follone-widget .petWrap::after{
+  content:"";
+  position:absolute;
+  left: 12px;
   right: 12px;
-  top: 12px;
+  bottom: -6px;
+  height: 14px;
+  border-radius: 999px;
+  background: radial-gradient(closest-side, rgba(0,0,0,0.12), transparent 70%);
+  opacity: 0.55;
+  filter: blur(0.2px);
+}
+
+#follone-widget .stageMeta{ min-width:0; }
+#follone-widget .name{
+  font-weight: 900;
+  letter-spacing: 0.2px;
+  font-size: 14px;
+  line-height: 1.1;
+}
+#follone-widget .state{
+  margin-top: 4px;
+  color: var(--ui-ink-2);
+  font-size: 11px;
+  letter-spacing: 0.2px;
+}
+
+#follone-widget .miniRow{ display:flex; gap: 8px; margin-top: 8px; }
+#follone-widget button{ font-family: inherit; }
+#follone-widget .miniBtn{
+  border-radius: 14px;
+  border: 1px solid rgba(42,39,35,0.12);
+  background: rgba(255,255,255,0.62);
+  color: var(--ui-ink-0);
+  padding: 7px 10px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor:pointer;
+  box-shadow: 0 6px 18px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.80);
+  transition: transform var(--t-fast) var(--ease-out), filter var(--t-fast) var(--ease-out);
+}
+#follone-widget .miniBtn:hover{ filter: brightness(1.03); transform: translateY(-1px); }
+#follone-widget .miniBtn:active{ transform: translateY(0px); }
+
+/* ---- Meters ---- */
+#follone-widget .meters{
+  margin-top: 10px;
+  padding: 10px 10px 10px;
+  border-radius: 16px;
+  background: rgba(255,255,255,0.45);
+  border: 1px solid rgba(42,39,35,0.10);
+  box-shadow: var(--bevel);
+}
+
+#follone-widget .meterRow{ display:flex; align-items:center; gap: 8px; padding: 5px 2px; }
+
+#follone-widget .meterIcon{
+  width: 18px;
+  text-align:center;
+  font-family: var(--font-dot-ui);
+  font-size: 12px;
+  color: rgba(42,39,35,0.55);
+  user-select:none;
+}
+
+#follone-widget .meterTrack{
+  position: relative;
+  flex: 1;
+  height: 12px;
+  border-radius: 8px;
+  background: rgba(42,39,35,0.06);
+  border: 1px solid rgba(42,39,35,0.10);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
+  overflow: hidden;
+}
+
+/* Empty block pattern (■□□ style) */
+#follone-widget .meterTrack::before{
+  content:"";
+  position:absolute;
+  inset: 1px;
+  border-radius: 6px;
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(42,39,35,0.18) 0px,
+      rgba(42,39,35,0.18) 9px,
+      rgba(0,0,0,0) 9px,
+      rgba(0,0,0,0) 12px);
+  opacity: 0.22;
+  pointer-events:none;
+}
+
+#follone-widget .meterFill{
+  height:100%;
+  width:0%;
+  position: relative;
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(42,39,35,0.10) 0px,
+      rgba(42,39,35,0.10) 9px,
+      rgba(0,0,0,0) 9px,
+      rgba(0,0,0,0) 12px),
+    linear-gradient(90deg, var(--ui-accent-soft), var(--ui-accent));
+  transition: width var(--t-slow) var(--ease-soft);
+}
+
+/* Tip glow (accent only at the end) */
+#follone-widget .meterFill::after{
+  content:"";
+  position:absolute;
+  right: -8px;
+  top: -6px;
+  width: 18px;
+  height: 22px;
+  background: radial-gradient(closest-side, var(--ui-accent-glow), transparent 70%);
+  opacity: 0.85;
+  pointer-events:none;
+}
+
+/* Boot sequence: meters light up with a left-to-right sweep */
+#follone-widget.booting .meterFill{
+  transform-origin: left;
+  animation: folloneBootSweep 620ms var(--ease-out) both;
+}
+#follone-widget.booting .meterRow:nth-child(1) .meterFill{ animation-delay: 80ms; }
+#follone-widget.booting .meterRow:nth-child(2) .meterFill{ animation-delay: 140ms; }
+#follone-widget.booting .meterRow:nth-child(3) .meterFill{ animation-delay: 200ms; }
+
+@keyframes folloneBootSweep{
+  0%{ transform: scaleX(0.08); filter: brightness(1.25) saturate(1.1); }
+  70%{ transform: scaleX(1.0); filter: brightness(1.05) saturate(1.0); }
+  100%{ transform: scaleX(1.0); filter: none; }
+}
+
+#follone-widget .meterVal{
+  width: 44px;
+  text-align:right;
+  font-family: var(--font-dot-ui);
+  font-size: var(--fs-ui);
+  letter-spacing: 0.02em;
+  font-variant-numeric: tabular-nums;
+  color: rgba(42,39,35,0.62);
+  opacity: 0;
+  transition: opacity var(--t-mid) var(--ease-out);
+}
+
+/* show numbers on hover (keeps overlay clean) */
+#follone-widget .meters:hover .meterVal{ opacity: 1; }
+
+/* keep these for logic but hide by default */
+#follone-widget .dashInfo{ display:none; }
+
+/* ---- Ticker (dot board) ---- */
+#follone-widget #follone-taskbar.ticker{
+  margin-top: 10px;
+  border-radius: 16px;
+  border: 1px solid rgba(42,39,35,0.12);
+  background: rgba(255,255,255,0.42);
+  box-shadow: var(--bevel);
+  padding: 8px 10px 9px;
+  overflow:hidden;
+  position: relative;
+}
+
+/* dot-matrix substrate */
+#follone-widget #follone-taskbar.ticker::before{
+  content:"";
+  position:absolute; inset:0;
+  background: radial-gradient(rgba(42,39,35,0.10) 1px, transparent 1px);
+  background-size: 4px 4px;
+  opacity: 0.55;
+  pointer-events:none;
+}
+
+#follone-widget #follone-taskbar.ticker::after{
+  content:"";
+  position:absolute; inset:-2px;
+  background: radial-gradient(240px 120px at 24% 0%, var(--ui-accent-glow), transparent 62%);
+  opacity: 0.45;
+  pointer-events:none;
+}
+
+#follone-widget .tickerTop,
+#follone-widget .tickerBot{
+  position: relative;
+  font-family: var(--font-dot-ticker);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: var(--letter-dot);
+  text-transform: uppercase;
+  line-height: 1.1;
+  user-select: none;
+  text-rendering: optimizeSpeed;
+}
+
+#follone-widget .tickerTop{
+  font-weight: 900;
+  font-size: var(--fs-ticker-top);
+  color: rgba(42,39,35,0.92);
+  text-shadow: 0 1px 0 rgba(255,255,255,0.55);
+}
+
+#follone-widget .tickerBot{
+  margin-top: 4px;
+  font-weight: 800;
+  font-size: var(--fs-ticker-bottom);
+  color: rgba(42,39,35,0.70);
+}
+
+/* glitch pulse (noise->settle) */
+#follone-widget #follone-taskbar.glitch::before{ opacity: 0.75; filter: contrast(1.2); }
+#follone-widget #follone-taskbar.glitch .tickerTop,
+#follone-widget #follone-taskbar.glitch .tickerBot{ filter: blur(0.25px); transform: translateY(0.1px); }
+
+/* ---- Actions ---- */
+#follone-widget .actions{ margin-top: 10px; }
+
+#follone-widget .xpLine{
+  display:grid;
+  grid-template-columns: auto auto 1fr;
+  align-items:center;
+  gap: 8px;
+  padding: 8px 10px;
+  border-radius: 14px;
+  background: rgba(255,255,255,0.42);
+  border: 1px solid rgba(42,39,35,0.10);
+  box-shadow: var(--bevel);
+}
+
+#follone-widget .xpLabel,
+#follone-widget .xpNext{
+  font-family: var(--font-dot-ui);
+  font-size: 11px;
+  color: rgba(42,39,35,0.70);
+  font-weight: 900;
+  letter-spacing: 0.02em;
+}
+
+#follone-widget .xpBarWrap{
+  height: 12px;
+  border-radius: 8px;
+  background: rgba(42,39,35,0.06);
+  border: 1px solid rgba(42,39,35,0.10);
+  overflow:hidden;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
+  position: relative;
+}
+
+/* Empty blocks for XP */
+#follone-widget .xpBarWrap::before{
+  content:"";
+  position:absolute;
+  inset: 1px;
+  border-radius: 6px;
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(42,39,35,0.18) 0px,
+      rgba(42,39,35,0.18) 9px,
+      rgba(0,0,0,0) 9px,
+      rgba(0,0,0,0) 12px);
+  opacity: 0.18;
+  pointer-events:none;
+}
+
+#follone-widget .xpBar{
+  height:100%;
+  width:0%;
+  position: relative;
+  background:
+    /* block mask */
+    repeating-linear-gradient(90deg,
+      rgba(0,0,0,0) 0px,
+      rgba(0,0,0,0) 9px,
+      rgba(0,0,0,0.18) 9px,
+      rgba(0,0,0,0.18) 12px),
+    /* diagonal stripe fill */
+    repeating-linear-gradient(135deg,
+      rgba(255,255,255,0.22) 0px,
+      rgba(255,255,255,0.22) 6px,
+      rgba(0,0,0,0) 6px,
+      rgba(0,0,0,0) 12px),
+    linear-gradient(90deg, var(--ui-accent-soft), var(--ui-accent));
+  background-size: 12px 100%, 24px 24px, auto;
+  animation: folloneStripe 1.2s linear infinite;
+  transition: width var(--t-mid) var(--ease-out);
+}
+
+@keyframes folloneStripe{
+  from{ background-position: 0 0, 0 0, 0 0; }
+  to{ background-position: 0 0, 24px 24px, 0 0; }
+}
+
+/* Boot sequence for XP line */
+#follone-widget.booting .xpBar{
+  transform-origin: left;
+  animation: folloneBootSweep 680ms var(--ease-out) both, folloneStripe 1.2s linear infinite;
+}
+
+#follone-widget .actionBtn{
+  width: 100%;
+  margin-top: 8px;
+  border-radius: 16px;
+  border: 1px solid rgba(42,39,35,0.12);
+  background: rgba(255,255,255,0.60);
+  color: var(--ui-ink-0);
+  padding: 10px 12px;
+  font-size: 12px;
+  font-weight: 900;
+  cursor:pointer;
+  box-shadow: 0 10px 26px rgba(0,0,0,0.08), inset 0 1px 0 rgba(255,255,255,0.82);
+  transition: transform var(--t-fast) var(--ease-out), filter var(--t-fast) var(--ease-out);
+}
+
+#follone-widget .actionBtn:hover{ filter: brightness(1.03); transform: translateY(-1px); }
+#follone-widget .actionBtn:active{ transform: translateY(0px); }
+
+#follone-widget .muted{ margin-top: 8px; color: rgba(42,39,35,0.55); font-size: 11px; }
+
+/* hide text-heavy quests on overlay (kept for internal logic) */
+#follone-widget .quests{ display:none; }
+
+/* ---- State tuning ---- */
+#follone-widget[data-state="standby"]{ --glass-scanline: 0.03; --glass-noise: 0.01; }
+#follone-widget[data-state="collecting"]{ --glass-scanline: 0.06; --glass-noise: 0.03; }
+#follone-widget[data-state="classifying"]{ --glass-scanline: 0.10; --glass-noise: 0.05; }
+#follone-widget[data-state="spotlight"]{ --glass-opacity: 0.42; --glass-scanline: 0.10; }
+#follone-widget[data-state="error"]{ --glass-noise: 0.07; }
+
+/* ---- Motion hooks ---- */
+@keyframes folloneBreath { 0%,100% { filter: brightness(1); } 50% { filter: brightness(1.04); } }
+@keyframes folloneScan {
+  0% { background-position: 0px 0px; }
+  100% { background-position: 60px 0px; }
+}
+
+#follone-widget[data-state="standby"] #follone-taskbar.ticker{
+  animation: folloneBreath 2.4s ease-in-out infinite;
+}
+#follone-widget[data-state="classifying"] #follone-taskbar.ticker::before{
+  animation: folloneScan 1.2s linear infinite;
+}
+#follone-widget[data-state="spotlight"] #follone-taskbar.ticker{
+  /* stronger presence during spotlight */
+  animation: folloneBreath 1.2s ease-in-out infinite;
+  border-color: rgba(224, 58, 58, 0.35);
+  box-shadow: 0 10px 26px rgba(0,0,0,0.14), 0 0 0 1px rgba(224, 58, 58, 0.16);
+}
+
+@keyframes folloneWarnBlink {
+  0%, 49% { filter: brightness(1); }
+  50%, 100% { filter: brightness(1.18); }
+}
+
+/* severity-driven warning while spotlight is open */
+#follone-widget[data-state="spotlight"][data-alert="high"] #follone-taskbar.ticker,
+#follone-widget[data-state="spotlight"][data-alert="3"] #follone-taskbar.ticker,
+#follone-widget[data-state="spotlight"][data-alert="2"] #follone-taskbar.ticker{
+  animation: folloneWarnBlink 900ms steps(2, end) infinite;
+}
+#follone-widget[data-state="error"] #follone-taskbar.ticker{
+  animation: none;
+}
+#follone-widget[data-state="cooldown"] #follone-taskbar.ticker::before{
+  animation: folloneScan 1.6s linear infinite;
+}
+
+/* reduce harshness for overlay/backdrop */
+#follone-overlay, #follone-spotlight-overlay{
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+
+/* ------------------------------------------------------------------
+   Spotlight intervention overlay (veil + popover)
+   NOTE: Content script injects #follone-spotlight
+------------------------------------------------------------------ */
+
+#follone-spotlight{
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646;
+  display: none;
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, "Hiragino Sans", "Noto Sans JP", sans-serif;
+}
+
+#follone-spotlight.show{ display:block; }
+
+/* target emphasis */
+.follone-spotlight-target{
+  outline: 2px solid rgba(224, 58, 58, 0.55);
+  outline-offset: 2px;
+  border-radius: 16px;
+  box-shadow: 0 0 0 6px rgba(224, 58, 58, 0.16);
+}
+
+.follone-spotlight-target .follone-target-badge{
+  position: absolute;
+  left: 10px;
+  top: 10px;
   z-index: 2;
   padding: 6px 10px;
   border-radius: 999px;
-  font-size: 12px;
-  font-weight: 900;
-  background: rgba(20,20,22,0.88);
-  border: 1px solid rgba(var(--follone-accent-rgb),0.35);
-  color: #fff;
-  pointer-events: none;
+  background: rgba(246,241,234,0.92);
+  border: 1px solid rgba(224,58,58,0.38);
+  color: rgba(42,39,35,0.9);
+  font-family: var(--font-dot-ui, ui-monospace, monospace);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+  box-shadow: 0 12px 28px rgba(0,0,0,0.18);
 }
-#follone-widget .dashTitle {
-  font-size: 12px;
-  opacity: 0.95;
-  margin-bottom: 8px;
-}
-#follone-widget .dashRow {
-  display: flex;
-  justify-content: space-between;
-  font-size: 12px;
-  opacity: 0.92;
-}
-#follone-widget .dashSub{font-size:11px;opacity:0.78;margin-top:6px;line-height:1.25;word-break:break-word;}
 
-#follone-widget .dashBarWrap {
-  margin-top: 8px;
-  height: 8px;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.10);
+/* veil slices */
+#follone-spotlight .veil{
+  position: fixed;
+  background: rgba(0,0,0,0.48);
+  backdrop-filter: blur(1.5px);
+}
+
+/* popover */
+#follone-spotlight .popover{
+  position: fixed;
+  width: 360px;
+  max-width: min(420px, calc(100vw - 24px));
+  background: rgba(246,241,234,0.96);
+  border: 1px solid rgba(42,39,35,0.14);
+  border-radius: 18px;
+  box-shadow: 0 26px 60px rgba(0,0,0,0.22);
   overflow: hidden;
 }
-#follone-widget .dashBar {
-  height: 100%;
-  width: 0%;
-  border-radius: 999px;
-  background: rgba(255,255,255,0.70);
-}
-#follone-widget .dashSmall {
-  margin-top: 8px;
-  font-size: 11px;
-  opacity: 0.82;
-  line-height: 1.35;
-}
-#follone-widget #follone-bubble-search {
-  width: 100%;
-  margin-top: 10px;
+
+#follone-spotlight .popover::before{
+  /* subtle CRT glass */
+  content:"";
+  position:absolute; inset:0;
+  pointer-events:none;
+  background:
+    radial-gradient(220px 120px at 12% 0%, rgba(255,255,255,0.36), transparent 70%),
+    repeating-linear-gradient(180deg, rgba(0,0,0,0.05) 0px, rgba(0,0,0,0.05) 1px, rgba(0,0,0,0) 3px, rgba(0,0,0,0) 6px);
+  opacity: 0.35;
 }
 
-
-/* Context invalidated banner */
-#follone-ctx-banner{
-  position: fixed;
-  left: 16px;
-  bottom: 16px;
-  z-index: 2147483647;
-  pointer-events: auto;
+#follone-spotlight .ph{
+  display:flex;
+  align-items:center;
+  gap: 10px;
+  padding: 12px 12px;
+  border-bottom: 1px solid rgba(42,39,35,0.10);
+  position: relative;
 }
-#follone-ctx-banner .ctxCard{
-  width: 280px;
-  border-radius: 14px;
-  padding: 12px;
-  background: rgba(20,20,20,0.92);
-  border: 1px solid var(--f-border);
-  color: rgba(255,255,255,0.92);
-  box-shadow: 0 18px 60px rgba(0,0,0,0.35);
-}
-#follone-ctx-banner .ctxTitle{ font-size: 13px; font-weight: 600; margin-bottom: 6px; }
-#follone-ctx-banner .ctxBody{ font-size: 12px; opacity: 0.9; line-height: 1.4; margin-bottom: 10px; }
-#follone-ctx-banner .ctxRow{ display:flex; gap:8px; }
-#follone-ctx-banner button{
-  flex:1;
-  height: 32px;
-  border-radius: 10px;
-  border: 1px solid rgba(255,255,255,0.18);
-  background: rgba(255,255,255,0.10);
-  color: rgba(255,255,255,0.92);
-  cursor: pointer;
-}
-#follone-ctx-banner button.ghost{ background: rgba(255,255,255,0.04); }
 
-
-/* task ticker (subtle) */
-#follone-widget .taskbar{
-  margin-top: 10px;
-  padding: 6px 8px;
-  font-size: 11px;
-  opacity: 0.72;
-  background: rgba(0,0,0,0.04);
-  border: 1px dashed rgba(0,0,0,0.10);
+#follone-spotlight .ph .avatar{
+  width: 42px;
+  height: 42px;
   border-radius: 12px;
-  letter-spacing: 0.6px;
-  user-select: none;
+  background: rgba(0,0,0,0.08);
+  overflow:hidden;
+}
+
+#follone-spotlight .ph .headText{ min-width:0; }
+#follone-spotlight .ph .title{ font-weight: 900; font-size: 13px; color: rgba(42,39,35,0.92); letter-spacing: 0.04em; }
+#follone-spotlight .ph .sub{ font-size: 11px; color: rgba(42,39,35,0.60); letter-spacing: 0.08em; }
+
+#follone-spotlight .ph .badge{
+  margin-left: auto;
+  padding: 6px 10px;
+  border-radius: 999px;
+  font-family: var(--font-dot-ui, ui-monospace, monospace);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  border: 1px solid rgba(42,39,35,0.16);
+  background: rgba(255,255,255,0.6);
+}
+
+#follone-spotlight .pb{ padding: 12px 14px; }
+#follone-spotlight .pb #follone-sp-text{ font-size: 13px; line-height: 1.55; color: rgba(42,39,35,0.92); }
+#follone-spotlight .pb .muted{ color: rgba(42,39,35,0.68); font-size: 11px; }
+
+#follone-spotlight .actions{ display:grid; grid-template-columns: 1fr 1fr; gap: 10px; padding: 12px 12px 14px; }
+#follone-spotlight .actions button{
+  border-radius: 14px;
+  border: 1px solid rgba(42,39,35,0.14);
+  background: rgba(255,255,255,0.72);
+  color: rgba(42,39,35,0.92);
+  padding: 10px 12px;
+  font-weight: 900;
+  cursor:pointer;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.12), inset 0 1px 0 rgba(255,255,255,0.75);
+  transition: transform 120ms cubic-bezier(.16,1,.3,1), filter 120ms cubic-bezier(.16,1,.3,1);
+}
+#follone-spotlight .actions button:hover{ transform: translateY(-1px); filter: brightness(1.02); }
+#follone-spotlight .actions button:active{ transform: translateY(0px) scale(0.99); }
+
+/* Strong warning styling */
+@keyframes spWarnPulse { 0%,49%{ box-shadow: 0 26px 60px rgba(0,0,0,0.22), 0 0 0 1px rgba(224,58,58,0.22);} 50%,100%{ box-shadow: 0 30px 70px rgba(0,0,0,0.26), 0 0 0 2px rgba(224,58,58,0.36);} }
+@keyframes spWarnStripe { 0%{ background-position: 0 0; } 100%{ background-position: 44px 0; } }
+@keyframes spWarnVeil { 0%,49%{ opacity: 1; } 50%,100%{ opacity: 0.86; } }
+
+#follone-spotlight[data-severity="high"] .popover,
+#follone-spotlight[data-severity="3"] .popover,
+#follone-spotlight[data-severity="2"] .popover{
+  border-color: rgba(224,58,58,0.55);
+  animation: spWarnPulse 900ms steps(2, end) infinite;
+}
+
+#follone-spotlight[data-severity="high"] .ph::after,
+#follone-spotlight[data-severity="3"] .ph::after,
+#follone-spotlight[data-severity="2"] .ph::after{
+  content:"";
+  position:absolute;
+  left:0; right:0; top:0;
+  height: 8px;
+  background: repeating-linear-gradient(135deg, rgba(224,58,58,0.88) 0px, rgba(224,58,58,0.88) 10px, rgba(255,255,255,0) 10px, rgba(255,255,255,0) 20px);
+  opacity: 0.55;
+  animation: spWarnStripe 900ms linear infinite;
+}
+
+#follone-spotlight[data-severity="high"] .ph .badge,
+#follone-spotlight[data-severity="3"] .ph .badge{
+  border-color: rgba(224,58,58,0.55);
+  background: rgba(224,58,58,0.12);
+  color: rgba(140,14,14,0.95);
+}
+
+#follone-spotlight[data-severity="2"] .ph .badge{
+  border-color: rgba(224,124,58,0.50);
+  background: rgba(224,124,58,0.12);
+  color: rgba(110,52,10,0.95);
+}
+
+#follone-spotlight[data-severity="high"] .veil,
+#follone-spotlight[data-severity="3"] .veil{
+  background: rgba(0,0,0,0.58);
+  animation: spWarnVeil 900ms steps(2, end) infinite;
 }
 
 
+/* === M8E: Stronger spotlight contrast + ticker emphasis === */
 
-/* dev mapping tag */
-#follone-widget .follone-idtag{
-  font-size: 10px;
-  padding: 2px 6px;
-  border-radius: 999px;
-  background: rgba(0,0,0,0.08);
-  border: 1px solid rgba(0,0,0,0.12);
-  color: rgba(0,0,0,0.65);
+/* Ticker goes "ALERT" mode with higher contrast */
+#follone-widget[data-state="spotlight"] #follone-taskbar.ticker{
+  background: rgba(224, 58, 58, 0.10);
+  border-color: rgba(224, 58, 58, 0.52);
+  box-shadow: 0 14px 34px rgba(0,0,0,0.18), 0 0 0 2px rgba(224, 58, 58, 0.16);
+}
+
+#follone-widget[data-state="spotlight"][data-alert="3"] #follone-taskbar.ticker,
+#follone-widget[data-state="spotlight"][data-alert="high"] #follone-taskbar.ticker{
+  background: rgba(224, 58, 58, 0.18);
+  border-color: rgba(224, 58, 58, 0.78);
+}
+
+/* Spotlight popover: make the danger unmistakable */
+#follone-spotlight[data-severity="3"] .popover,
+#follone-spotlight[data-severity="high"] .popover{
+  background: rgba(255, 236, 236, 0.98);
+  border: 2px solid rgba(224,58,58,0.85);
+  box-shadow: 0 34px 84px rgba(0,0,0,0.34), 0 0 0 2px rgba(224,58,58,0.22);
+}
+
+#follone-spotlight[data-severity="2"] .popover{
+  background: rgba(255, 244, 236, 0.98);
+  border: 2px solid rgba(224,124,58,0.80);
+  box-shadow: 0 30px 76px rgba(0,0,0,0.30), 0 0 0 2px rgba(224,124,58,0.18);
+}
+
+#follone-spotlight[data-severity="3"] .ph,
+#follone-spotlight[data-severity="high"] .ph{
+  background: linear-gradient(180deg, rgba(224,58,58,0.18), rgba(255,255,255,0));
+}
+#follone-spotlight[data-severity="2"] .ph{
+  background: linear-gradient(180deg, rgba(224,124,58,0.16), rgba(255,255,255,0));
+}
+
+/* Buttons: primary action looks like "escape" */
+#follone-spotlight[data-severity="3"] .actions button,
+#follone-spotlight[data-severity="high"] .actions button{
+  border-color: rgba(224,58,58,0.55);
+}
+#follone-spotlight[data-severity="3"] .actions button.primary,
+#follone-spotlight[data-severity="high"] .actions button.primary{
+  background: rgba(224,58,58,0.18);
+  border-color: rgba(224,58,58,0.85);
+}
+
+/* If content script didn't add .primary, still make the first button more prominent */
+#follone-spotlight[data-severity="3"] .actions button:first-child,
+#follone-spotlight[data-severity="high"] .actions button:first-child{
+  background: rgba(224,58,58,0.16);
+  border-color: rgba(224,58,58,0.80);
+}
+
+/* Post target outline stronger during high severity */
+#follone-spotlight[data-severity="3"] .follone-spotlight-target,
+#follone-spotlight[data-severity="high"] .follone-spotlight-target{
+  outline-color: rgba(224, 58, 58, 0.88);
+  box-shadow: 0 0 0 10px rgba(224, 58, 58, 0.22), 0 0 60px rgba(224,58,58,0.18);
+}
+
+
+/* === M8E: Stronger spotlight contrast + ticker emphasis === */
+
+/* Ticker goes "ALERT" mode with higher contrast */
+#follone-widget[data-state="spotlight"] #follone-taskbar.ticker{
+  background: rgba(224, 58, 58, 0.10);
+  border-color: rgba(224, 58, 58, 0.52);
+  box-shadow: 0 14px 34px rgba(0,0,0,0.18), 0 0 0 2px rgba(224, 58, 58, 0.16);
+}
+
+#follone-widget[data-state="spotlight"][data-alert="3"] #follone-taskbar.ticker,
+#follone-widget[data-state="spotlight"][data-alert="2"] #follone-taskbar.ticker{
+  background: rgba(224, 58, 58, 0.16);
+  border-color: rgba(224, 58, 58, 0.72);
+}
+
+#follone-widget[data-state="spotlight"][data-alert="3"] #follone-status-top,
+#follone-widget[data-state="spotlight"][data-alert="2"] #follone-status-top{
+  color: rgba(140, 14, 14, 0.95);
+  font-weight: 1000;
+}
+
+/* Spotlight popover: make it visually "danger" and obvious */
+#follone-spotlight[data-severity="3"] .popover,
+#follone-spotlight[data-severity="2"] .popover{
+  background: rgba(255, 236, 236, 0.98);
+  border-color: rgba(224, 58, 58, 0.72);
+  box-shadow: 0 34px 84px rgba(0,0,0,0.34), 0 0 0 3px rgba(224,58,58,0.22);
+}
+
+#follone-spotlight[data-severity="3"] .ph,
+#follone-spotlight[data-severity="2"] .ph{
+  border-bottom-color: rgba(224, 58, 58, 0.22);
+  background: linear-gradient(180deg, rgba(224,58,58,0.14), rgba(255,255,255,0));
+}
+
+#follone-spotlight[data-severity="3"] .ph .title,
+#follone-spotlight[data-severity="2"] .ph .title{
+  color: rgba(120, 10, 10, 0.95);
+}
+
+#follone-spotlight[data-severity="3"] .actions button.primary,
+#follone-spotlight[data-severity="2"] .actions button.primary{
+  background: rgba(224, 58, 58, 0.16);
+  border-color: rgba(224, 58, 58, 0.55);
+}
+
+#follone-spotlight[data-severity="3"] .actions button.primary:hover,
+#follone-spotlight[data-severity="2"] .actions button.primary:hover{
+  filter: brightness(1.06);
+}
+
+/* Stronger target outline */
+#follone-spotlight[data-severity="3"] .follone-spotlight-target,
+#follone-spotlight[data-severity="2"] .follone-spotlight-target{
+  outline: 3px solid rgba(224, 58, 58, 0.78);
+  box-shadow: 0 0 0 8px rgba(224, 58, 58, 0.22), 0 18px 64px rgba(224,58,58,0.14);
+}
+
+
+/* --- Strong warning palette for spotlight actions (ids-based) --- */
+@keyframes folloneSpotPulse {
+  0% { box-shadow: 0 26px 60px rgba(0,0,0,0.22), 0 0 0 0 rgba(224,58,58,0.0); }
+  60% { box-shadow: 0 28px 66px rgba(0,0,0,0.24), 0 0 0 10px rgba(224,58,58,0.10); }
+  100% { box-shadow: 0 26px 60px rgba(0,0,0,0.22), 0 0 0 0 rgba(224,58,58,0.0); }
+}
+
+#follone-spotlight[data-severity="3"] .popover,
+#follone-spotlight[data-severity="2"] .popover{
+  border: 2px solid rgba(224,58,58,0.46);
+  background: rgba(255,244,244,0.96);
+  animation: folloneSpotPulse 1.4s ease-in-out infinite;
+}
+
+#follone-spotlight[data-severity="3"] .badge,
+#follone-spotlight[data-severity="2"] .badge{
+  background: rgba(224,58,58,0.16);
+  border-color: rgba(224,58,58,0.52);
+  color: rgba(120,10,10,0.95);
+}
+
+#follone-spotlight[data-severity="3"] .actions #follone-sp-search,
+#follone-spotlight[data-severity="3"] .actions #follone-sp-continue,
+#follone-spotlight[data-severity="2"] .actions #follone-sp-search,
+#follone-spotlight[data-severity="2"] .actions #follone-sp-continue{
+  background: rgba(224,58,58,0.22);
+  border-color: rgba(224,58,58,0.62);
+  color: rgba(86, 8, 8, 0.96);
+}
+
+#follone-spotlight[data-severity="3"] .actions #follone-sp-search:hover,
+#follone-spotlight[data-severity="3"] .actions #follone-sp-continue:hover,
+#follone-spotlight[data-severity="2"] .actions #follone-sp-search:hover,
+#follone-spotlight[data-severity="2"] .actions #follone-sp-continue:hover{
+  filter: brightness(1.06);
+}
+
+/* Widget ticker: more obvious "SPOT" mode */
+#follone-widget[data-state="spotlight"] #follone-taskbar .line1{
+  font-weight: 800;
+  letter-spacing: 0.10em;
+}
+#follone-widget[data-state="spotlight"] #follone-taskbar .line2{
+  opacity: 0.92;
+}
+
+
+/* ------------------------------------------------------------
+   Fullscreen Loader (startup / navigation)
+   NOTE: DOM is created in content.js (#follone-loader). CSS was
+   missing in dot-ui refactor; without this loader is invisible.
+------------------------------------------------------------ */
+#follone-loader{
+  position: fixed;
+  inset: 0;
+  z-index: 2147483646; /* just under widget (widget is 2147483647) */
+  /* Fallback tokens (loader lives outside #follone-widget scope) */
+  --ui-accent: #7B61FF;
+  --ui-accent-glow: rgba(123,97,255,0.22);
+  --font-dot-ui: "DotGothic16", "Dot Gothic 16", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --font-dot-ticker: "DotGothic16", "Dot Gothic 16", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+  --t-mid: 220ms;
+  --ease-out: cubic-bezier(.16,1,.3,1);
+  display: grid;
+  place-items: center;
   pointer-events: none;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: 0.2px;
+  opacity: 0;
+  transform: translateZ(0);
+  transition: opacity var(--t-mid) var(--ease-out);
+}
+#follone-loader.show{
+  pointer-events: auto;
+  opacity: 1;
+}
+
+#follone-loader::before{
+  /* Veil + subtle CRT texture */
+  content:"";
+  position:absolute; inset:0;
+  background:
+    radial-gradient(1200px 600px at 50% 30%, rgba(255,255,255,0.55), rgba(0,0,0,0.35) 70%),
+    radial-gradient(600px 380px at 20% 15%, var(--ui-accent-glow), transparent 70%),
+    repeating-linear-gradient(180deg, rgba(0,0,0,0.08) 0px, rgba(0,0,0,0.08) 1px, rgba(0,0,0,0) 3px, rgba(0,0,0,0) 7px);
+  opacity: 0.95;
+}
+
+#follone-loader .box{
+  position: relative;
+  width: min(520px, calc(100vw - 48px));
+  border-radius: 22px;
+  padding: 18px 18px 16px;
+  background: linear-gradient(180deg, rgba(246,241,234,0.92), rgba(239,231,221,0.86));
+  border: 1px solid rgba(42,39,35,0.18);
+  box-shadow:
+    0 24px 70px rgba(0,0,0,0.24),
+    inset 0 1px 0 rgba(255,255,255,0.60);
+  overflow: hidden;
+}
+
+#follone-loader .box::after{
+  /* inner dot grid */
+  content:"";
+  position:absolute; inset:0;
+  background:
+    radial-gradient(rgba(42,39,35,0.08) 1px, transparent 1px);
+  background-size: 4px 4px;
+  opacity: 0.35;
+  pointer-events:none;
+}
+
+#follone-loader .brand{
+  position: relative;
+  font-family: var(--font-dot-ticker);
+  letter-spacing: 0.10em;
+  font-size: 22px;
+  font-weight: 900;
+  color: rgba(42,39,35,0.88);
+  text-shadow: 0 1px 0 rgba(255,255,255,0.55);
+  margin-bottom: 4px;
+}
+
+#follone-loader .brand .ch{
+  display:inline-block;
+  animation: folloneLoaderCh 680ms steps(2,end) infinite;
+}
+@keyframes folloneLoaderCh{
+  0%{ opacity: 0.35; filter: blur(0px); }
+  50%{ opacity: 1; }
+  100%{ opacity: 0.55; }
+}
+
+#follone-loader .subtitle{
+  position: relative;
+  font-family: var(--font-dot-ui);
+  font-size: 12px;
+  letter-spacing: 0.08em;
+  color: rgba(42,39,35,0.70);
+}
+
+#follone-loader .quote{
+  position: relative;
+  margin-top: 8px;
+  font-family: var(--font-dot-ui);
+  font-size: 12px;
+  color: rgba(42,39,35,0.78);
+  opacity: 0.95;
+}
+
+/* Block gauge (■□□ style) with animated diagonal dot stripes */
+#follone-loader .progressWrap{
+  position: relative;
+  margin-top: 14px;
+  height: 14px;
+  border-radius: 10px;
+  background: rgba(42,39,35,0.10);
+  border: 1px solid rgba(42,39,35,0.14);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.50);
+  overflow: hidden;
+}
+
+#follone-loader .progressWrap::before{
+  /* block ticks */
+  content:"";
+  position:absolute; inset:0;
+  background:
+    repeating-linear-gradient(90deg,
+      rgba(255,255,255,0.00) 0px,
+      rgba(255,255,255,0.00) 10px,
+      rgba(42,39,35,0.16) 10px,
+      rgba(42,39,35,0.16) 12px);
+  opacity: 0.75;
+  mix-blend-mode: multiply;
+  pointer-events:none;
+}
+
+#follone-loader .progressBar{
+  position:absolute; left:0; top:0; bottom:0;
+  width: 0%;
+  border-radius: 10px;
+  background:
+    repeating-linear-gradient(135deg,
+      rgba(255,255,255,0.18) 0px,
+      rgba(255,255,255,0.18) 6px,
+      rgba(0,0,0,0.06) 6px,
+      rgba(0,0,0,0.06) 12px),
+    linear-gradient(90deg, rgba(42,39,35,0.25), rgba(42,39,35,0.28));
+  box-shadow:
+    0 0 0 1px rgba(42,39,35,0.10) inset,
+    0 0 24px var(--ui-accent-glow);
+  animation: folloneLoaderStripe 980ms linear infinite;
+}
+
+@keyframes folloneLoaderStripe{
+  0%{ background-position: 0 0, 0 0; }
+  100%{ background-position: 24px 0, 0 0; }
+}
+
+#follone-loader .meta{
+  position: relative;
+  display:flex;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+#follone-loader .pill{
+  font-family: var(--font-dot-ui);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(255,255,255,0.55);
+  border: 1px solid rgba(42,39,35,0.12);
+  color: rgba(42,39,35,0.72);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.55);
+}
+
+/* Loader: spotlight-like emphasis (optional) */
+#follone-loader.show .box{
+  outline: 2px solid rgba(42,39,35,0.10);
 }
