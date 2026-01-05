@@ -526,7 +526,10 @@
       biasAgg: null,
       characterId: 'follone',
       equippedHead: '',
-      backend: { state: 'unavailable', session: '--', latency: '--' },
+            equippedFx: '',
+      ownedHead: [],
+      ownedFx: [],
+backend: { state: 'unavailable', session: '--', latency: '--' },
       master: { enabled: true, analyze: true, intervene: true, display: true },
     },
     chartLast: { focus: 0, variety: 0, explore: 0 }
@@ -558,6 +561,9 @@
       'retroPet_characterId',
       'likoris_characterId',
       'follone_equippedHead',
+      'follone_equippedFx',
+      'follone_ownedHead',
+      'follone_ownedFx',
       // quick settings
       'follone_safeFilterEnabled',
       'follone_softWarningEnabled',
@@ -1035,7 +1041,8 @@
     // right bias card summary
     const biasCard = document.querySelector('#sideBias');
     if (biasCard) biasCard.textContent = `Focus ${Math.round(m.focus*100)}% / Variety ${Math.round(m.variety*100)}% / Explore ${Math.round(m.explore*100)}%`;
-  }
+    renderAccessorySelects();
+}
   // -----------------------------
   // Phase1: PetEngine boot (kept when Phase2 adds data)
   // -----------------------------
@@ -1991,22 +1998,83 @@ if (dom.btnBack) dom.btnBack.addEventListener('click', () => setView('home'));
     await new Promise(res => chrome.storage.local.set(obj, res));
   }
 
-  function bindAccessory() {
+  
+function renderAccessorySelects() {
+  // Rebuild options from owned lists so the UI always matches progress.
+  try {
     if (dom.selHead) {
-      dom.selHead.addEventListener('change', async () => {
-        const v = dom.selHead.value;
-        app.data.equippedHead = (v === 'none') ? '' : v;
-        // SW expects follone_equippedHead
-        await writeOne('follone_equippedHead', app.data.equippedHead);
-      });
+      const owned = Array.isArray(app.data.ownedHead) ? app.data.ownedHead : [];
+      const current = app.data.equippedHead || '';
+      dom.selHead.innerHTML = '';
+      const optNone = document.createElement('option');
+      optNone.value = 'none';
+      optNone.textContent = 'none';
+      dom.selHead.appendChild(optNone);
+      for (const id of owned) {
+        const o = document.createElement('option');
+        o.value = id;
+        o.textContent = id;
+        dom.selHead.appendChild(o);
+      }
+      dom.selHead.value = current ? current : 'none';
     }
-    // FX isn't in SW yet in this build; keep UI local without breaking.
     if (dom.selFx) {
-      dom.selFx.addEventListener('change', () => {});
+      const owned = Array.isArray(app.data.ownedFx) ? app.data.ownedFx : [];
+      const current = app.data.equippedFx || '';
+      dom.selFx.innerHTML = '';
+      const optNone = document.createElement('option');
+      optNone.value = 'none';
+      optNone.textContent = 'none';
+      dom.selFx.appendChild(optNone);
+      for (const id of owned) {
+        const o = document.createElement('option');
+        o.value = id;
+        o.textContent = id;
+        dom.selFx.appendChild(o);
+      }
+      dom.selFx.value = current ? current : 'none';
     }
+  } catch (_) {}
+}
+
+
+function bindAccessory() {
+  if (dom.selHead) {
+    dom.selHead.addEventListener('change', async () => {
+      const v = dom.selHead.value;
+      const id = (v === 'none') ? '' : v;
+      app.data.equippedHead = id;
+      // validate via SW (also persists)
+      const res = await sendMessage('FOLLONE_EQUIP_HEAD', { id });
+      if (res && res.ok) {
+        app.data.equippedHead = res.equippedHead || '';
+        app.data.ownedHead = Array.isArray(res.ownedHead) ? res.ownedHead.map(String) : app.data.ownedHead;
+        renderAccessorySelects();
+      } else {
+        // fallback: direct write
+        await writeOne('follone_equippedHead', id);
+      }
+    });
   }
 
-  function bindStorageListener() {
+  if (dom.selFx) {
+    dom.selFx.addEventListener('change', async () => {
+      const v = dom.selFx.value;
+      const id = (v === 'none') ? '' : v;
+      app.data.equippedFx = id;
+      const res = await sendMessage('FOLLONE_EQUIP_FX', { id });
+      if (res && res.ok) {
+        app.data.equippedFx = res.equippedFx || '';
+        app.data.ownedFx = Array.isArray(res.ownedFx) ? res.ownedFx.map(String) : app.data.ownedFx;
+        renderAccessorySelects();
+      } else {
+        await writeOne('follone_equippedFx', id);
+      }
+    });
+  }
+}
+
+function bindStorageListener() {
     if (!hasChrome() || !chrome.storage?.onChanged) return;
     chrome.storage.onChanged.addListener((changes, area) => {
       if (area !== 'local') return;
@@ -2026,9 +2094,22 @@ if (dom.btnBack) dom.btnBack.addEventListener('click', () => setView('home'));
         app.data.biasAgg = changes[BIAS_STORAGE_KEY].newValue;
         needBias = true;
       }
-      if (changes.follone_equippedHead && dom.selHead) {
-        const v = changes.follone_equippedHead.newValue || '';
-        dom.selHead.value = v || 'none';
+      if (changes.follone_equippedHead) {
+        app.data.equippedHead = changes.follone_equippedHead.newValue || '';
+      }
+      if (changes.follone_equippedFx) {
+        app.data.equippedFx = changes.follone_equippedFx.newValue || '';
+      }
+      if (changes.follone_ownedHead) {
+        const v = changes.follone_ownedHead.newValue;
+        app.data.ownedHead = Array.isArray(v) ? v.map(String) : [];
+      }
+if (changes.follone_ownedFx) {
+        const v = changes.follone_ownedFx.newValue;
+        app.data.ownedFx = Array.isArray(v) ? v.map(String) : [];
+      }
+if (dom.selHead || dom.selFx) {
+        renderAccessorySelects();
       }
 
       if (needProgress) renderProgress();
@@ -2078,6 +2159,9 @@ if (dom.btnBack) dom.btnBack.addEventListener('click', () => setView('home'));
     app.data.biasAgg = obj[BIAS_STORAGE_KEY] || null;
     app.data.characterId = pickCharacterId(obj);
     app.data.equippedHead = obj.follone_equippedHead || '';
+    app.data.equippedFx = obj.follone_equippedFx || '';
+    app.data.ownedHead = Array.isArray(obj.follone_ownedHead) ? obj.follone_ownedHead.map(String) : [];
+    app.data.ownedFx = Array.isArray(obj.follone_ownedFx) ? obj.follone_ownedFx.map(String) : [];
 
     // Quick settings (right monitor)
     app.data.safeFilter = obj.follone_safeFilterEnabled !== false;
@@ -2147,7 +2231,7 @@ if (dom.btnBack) dom.btnBack.addEventListener('click', () => setView('home'));
     app.data.lightLog = obj.follone_lightLog_v1 || {};
 
 
-    if (dom.selHead) dom.selHead.value = app.data.equippedHead ? app.data.equippedHead : 'none';
+    renderAccessorySelects();
 
     renderProgress();
       renderDev();

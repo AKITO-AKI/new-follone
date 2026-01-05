@@ -120,7 +120,9 @@
       "follone_showPostIds",
       "follone_characterId",
       "follone_riskPreset",
-      "follone_bubblePopup"
+      "follone_bubblePopup",
+      "follone_equippedHead",
+      "follone_equippedFx"
     ];
 
     const cur = await chrome.storage.local.get(keys);
@@ -177,6 +179,10 @@
     settings.showPostIds = Boolean(cur.follone_showPostIds ?? settings.showPostIds);
 
     settings.characterId = String(cur.follone_characterId ?? settings.characterId);
+
+    // Equipped accessories (always safe strings)
+    state.equippedHead = String(cur.follone_equippedHead || '');
+    state.equippedFx = String(cur.follone_equippedFx || '');
     settings.riskPreset = String(cur.follone_riskPreset ?? settings.riskPreset);
     settings.bubblePopup = Boolean(cur.follone_bubblePopup ?? settings.bubblePopup);
 
@@ -203,6 +209,11 @@
     lastUserActivityTs: Date.now(),
     lastInactiveSuggestTs: 0,
 
+
+    equippedHead: '',
+    equippedFx: '',
+    ownedHead: [],
+    ownedFx: [],
     _lastTabNavTs: 0,
 
     // Intervention arming / smoothness
@@ -782,6 +793,8 @@ async function storageGetSafe(keys) {
       state.level = Number(resp.level || xpToLevel(state.xp).lv || 1);
       state.ownedHead = Array.isArray(resp.ownedHead) ? resp.ownedHead.map(String) : [];
       state.equippedHead = resp.equippedHead ? String(resp.equippedHead) : "";
+      state.ownedFx = Array.isArray(resp.ownedFx) ? resp.ownedFx.map(String) : [];
+      state.equippedFx = resp.equippedFx ? String(resp.equippedFx) : "";
       state.quest = (resp.quest && typeof resp.quest === "object") ? resp.quest : null;
       return true;
     } catch (_) {
@@ -1839,7 +1852,30 @@ function installSearchLoaderHook() {
       </div>
     `;    document.documentElement.appendChild(w);
 
-    // Boot sequence: make meters "light up" once on mount (purely visual).
+    
+function bindEquipStorageListener() {
+  try {
+    if (!chrome?.storage?.onChanged) return;
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local") return;
+      let dirty = false;
+      if (changes.follone_equippedHead) {
+        state.equippedHead = String(changes.follone_equippedHead.newValue || "");
+        dirty = true;
+      }
+      if (changes.follone_equippedFx) {
+        state.equippedFx = String(changes.follone_equippedFx.newValue || "");
+        dirty = true;
+      }
+      if (dirty) {
+        // rerender pet immediately without reload
+        renderPetAvatars();
+      }
+    });
+  } catch (_) {}
+}
+
+// Boot sequence: make meters "light up" once on mount (purely visual).
     try {
       w.classList.add("booting");
       setTimeout(() => { try { w.classList.remove("booting"); } catch {} }, 950);
@@ -3843,6 +3879,7 @@ function maybeApplyResultToElement(elem, res, ctx) {
   (async () => {
     ensureRuntimeMaps();
     await loadSettings();
+    bindEquipStorageListener();
     await loadBiasAgg();
     await loadResultCache();
     log("info","[SETTINGS]","loaded", { enabled: settings.enabled, aiMode: settings.aiMode, debug: settings.debug, logLevel: settings.logLevel, batchSize: settings.batchSize, idleMs: settings.idleMs });

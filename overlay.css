@@ -199,6 +199,46 @@
 #follone-widget .miniBtn:hover{ filter: brightness(1.03); transform: translateY(-1px); }
 #follone-widget .miniBtn:active{ transform: translateY(0px); }
 
+/* -----------------------------
+   Minimize mode (avatar-only)
+   ----------------------------- */
+#follone-widget .petWrap{ position:relative; }
+#follone-widget .restoreBtn{
+  display:none;
+  align-items:center;
+  justify-content:center;
+  position:absolute;
+  right:-6px;
+  bottom:-6px;
+  min-width: 46px;
+  height: 28px;
+  padding: 0 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(42,39,35,0.12);
+  background: rgba(255,255,255,0.72);
+  color: var(--ui-ink-0);
+  font-weight: 900;
+  font-size: 12px;
+  cursor:pointer;
+  box-shadow: 0 10px 24px rgba(0,0,0,0.10), inset 0 1px 0 rgba(255,255,255,0.85);
+}
+
+#follone-widget.minimized .restoreBtn{ display:flex; }
+#follone-widget.minimized .stageMeta,
+#follone-widget.minimized .meters,
+#follone-widget.minimized .ticker,
+#follone-widget.minimized .actions,
+#follone-widget.minimized .muted,
+#follone-widget.minimized .quests{ display:none !important; }
+
+#follone-widget.minimized{
+  width: 150px;
+  right: 18px;
+  bottom: 18px;
+}
+#follone-widget.minimized .deviceInset{ padding: 14px 14px 12px; }
+#follone-widget.minimized .stage{ justify-content:center; }
+
 /* ---- Meters ---- */
 #follone-widget .meters{
   margin-top: 10px;
