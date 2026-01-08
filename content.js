@@ -209,6 +209,17 @@
     lastUserActivityTs: Date.now(),
     lastInactiveSuggestTs: 0,
 
+    // UI/runtime pause (Patch 5)
+    uiMinimized: false,
+    runtimePaused: false,
+    pauseEpoch: 0,
+    observers: null,
+    inactiveTickId: 0,
+    discoveryTimerId: 0,
+    analyzeTimerId: 0,
+    onUserActivity: null,
+    listenersAttached: false,
+
 
     equippedHead: '',
     equippedFx: '',
@@ -288,6 +299,33 @@
     spotlightRestore: null,
     spotlightLayoutTimer: 0
   };
+
+
+// -----------------------------
+// Equip storage listener (Options -> Overlay live update)
+// -----------------------------
+function bindEquipStorageListener() {
+  try {
+    if (!chrome?.storage?.onChanged) return;
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area !== "local") return;
+      let dirty = false;
+      if (changes.follone_equippedHead) {
+        state.equippedHead = String(changes.follone_equippedHead.newValue || "");
+        dirty = true;
+      }
+      if (changes.follone_equippedFx) {
+        state.equippedFx = String(changes.follone_equippedFx.newValue || "");
+        dirty = true;
+      }
+      if (dirty) {
+        // Rerender pet immediately without reload.
+        // If runtime is paused (minimized), we still update canvas so it's ready on restore.
+        renderPetAvatars();
+      }
+    });
+  } catch (_) {}
+}
 
   // -----------------------------
   // PetEngine (Canvas) - Overlay avatar rendering
@@ -1787,6 +1825,7 @@ function installSearchLoaderHook() {
             <div class="stage">
               <div class="petWrap">
                 <div class="avatar" id="follone-avatar"></div>
+                <button class="restoreBtn" id="follone-restore" title="戻す">戻す</button>
               </div>
               <div class="stageMeta">
                 <div class="name" id="follone-title">follone</div>
@@ -1794,6 +1833,7 @@ function installSearchLoaderHook() {
                 <div class="miniRow">
                   <button class="miniBtn" id="follone-toggle" title="ON/OFF">PWR</button>
                   <button class="miniBtn" id="follone-options" title="設定">SET</button>
+                  <button class="miniBtn" id="follone-minimize" title="最小化">＿</button>
                 </div>
               </div>
             </div>
@@ -1852,30 +1892,7 @@ function installSearchLoaderHook() {
       </div>
     `;    document.documentElement.appendChild(w);
 
-    
-function bindEquipStorageListener() {
-  try {
-    if (!chrome?.storage?.onChanged) return;
-    chrome.storage.onChanged.addListener((changes, area) => {
-      if (area !== "local") return;
-      let dirty = false;
-      if (changes.follone_equippedHead) {
-        state.equippedHead = String(changes.follone_equippedHead.newValue || "");
-        dirty = true;
-      }
-      if (changes.follone_equippedFx) {
-        state.equippedFx = String(changes.follone_equippedFx.newValue || "");
-        dirty = true;
-      }
-      if (dirty) {
-        // rerender pet immediately without reload
-        renderPetAvatars();
-      }
-    });
-  } catch (_) {}
-}
-
-// Boot sequence: make meters "light up" once on mount (purely visual).
+    // Boot sequence: make meters "light up" once on mount (purely visual).
     try {
       w.classList.add("booting");
       setTimeout(() => { try { w.classList.remove("booting"); } catch {} }, 950);
@@ -1970,6 +1987,11 @@ function bindEquipStorageListener() {
 
     w.querySelector("#follone-options").addEventListener("click", () => openOptions());
 
+    // Minimize / restore (Patch 5)
+    w.querySelector("#follone-minimize")?.addEventListener("click", () => setMinimized(true));
+    w.querySelector("#follone-restore")?.addEventListener("click", () => setMinimized(false));
+    updateMinimizedUI();
+
     // Dashboard action: widen perspective via X search
     // Policy: keep it one-click. Pick 1 suggested topic (rotating) and open an X search.
     w.querySelector("#follone-bias-search")?.addEventListener("click", () => {
@@ -1983,7 +2005,138 @@ function bindEquipStorageListener() {
     if (typeof ensureSpriteAnim === "function") ensureSpriteAnim();
     applyCharacterTheme();
     updateSpriteFromTask();
+
     renderWidget();
+  }
+
+  // -----------------------------
+  // Minimize / Pause controls (Patch 5)
+  // -----------------------------
+  async function loadUiPrefs() {
+    try {
+      const got = await chrome.storage.local.get({ follone_ui_minimized: false });
+      state.uiMinimized = !!got.follone_ui_minimized;
+    } catch (_) {
+      state.uiMinimized = false;
+    }
+  }
+
+  function updateMinimizedUI() {
+    const w = document.getElementById("follone-widget");
+    if (w) w.classList.toggle("minimized", !!state.uiMinimized);
+    // Toggle button visibility
+    const btnMin = document.getElementById("follone-minimize");
+    if (btnMin) btnMin.style.display = state.uiMinimized ? "none" : "";
+  }
+
+  async function setMinimized(min) {
+    const next = !!min;
+    if (state.uiMinimized === next) return;
+    state.uiMinimized = next;
+    try { await chrome.storage.local.set({ follone_ui_minimized: state.uiMinimized }); } catch (_) {}
+    updateMinimizedUI();
+    if (state.uiMinimized) pauseRuntime();
+    else resumeRuntime();
+  }
+
+  function pauseRuntime() {
+    if (state.runtimePaused) return;
+    state.runtimePaused = true;
+    state.pauseEpoch = (state.pauseEpoch || 0) + 1;
+
+    // Stop timers
+    try { if (state.highlightFlushTimer) clearTimeout(state.highlightFlushTimer); } catch (_) {}
+    state.highlightFlushTimer = 0;
+    try { if (state.discoveryTimerId) clearTimeout(state.discoveryTimerId); } catch (_) {}
+    state.discoveryTimerId = 0;
+    state.discoverScheduled = false;
+    try { if (state.analyzeTimerId) clearTimeout(state.analyzeTimerId); } catch (_) {}
+    state.analyzeTimerId = 0;
+    state.analyzeScheduled = false;
+
+    // Stop interval
+    try { if (state.inactiveTickId) clearInterval(state.inactiveTickId); } catch (_) {}
+    state.inactiveTickId = 0;
+
+    // Clear queues to avoid backlog build-up
+    try {
+      state.discoverQueue = [];
+      state.analyzeHigh = [];
+      state.analyzeLow = [];
+    } catch (_) {}
+
+    // Disconnect observers + remove listeners
+    disconnectObservers();
+
+    // Update ticker
+    setTask("paused");
+    renderWidget();
+  }
+
+  function resumeRuntime() {
+    if (!state.runtimePaused) {
+      // Ensure UI reflects current state
+      updateMinimizedUI();
+      return;
+    }
+    state.runtimePaused = false;
+
+    // Reconnect observers + listeners + interval
+    connectObservers();
+
+    // Kick pumps
+    scheduleDiscovery(0);
+    scheduleAnalyze(0);
+
+    // Update UI
+    setTask("idle");
+    renderWidget();
+  }
+
+  function disconnectObservers() {
+    const obs = state.observers;
+    if (!obs) return;
+    try { obs.prefetchIO.disconnect(); } catch (_) {}
+    try { obs.warmIO.disconnect(); } catch (_) {}
+    try { obs.highlightIO.disconnect(); } catch (_) {}
+    try { obs.mo.disconnect(); } catch (_) {}
+
+    if (state.listenersAttached && state.onUserActivity) {
+      try { window.removeEventListener("scroll", state.onUserActivity, { passive: true }); } catch (_) {}
+      try { window.removeEventListener("mousemove", state.onUserActivity, { passive: true }); } catch (_) {}
+      try { window.removeEventListener("keydown", state.onUserActivity, { passive: true }); } catch (_) {}
+      try { window.removeEventListener("pointerdown", state.onUserActivity, { passive: true }); } catch (_) {}
+      state.listenersAttached = false;
+    }
+  }
+
+  function connectObservers() {
+    const obs = state.observers;
+    if (!obs) return;
+
+    try {
+      obs.mo.observe(document.documentElement, { childList: true, subtree: true });
+    } catch (_) {}
+
+    try { obs.attachAll(); } catch (_) {}
+
+    if (!state.listenersAttached) {
+      if (state.onUserActivity) {
+        window.addEventListener("scroll", state.onUserActivity, { passive: true });
+        window.addEventListener("mousemove", state.onUserActivity, { passive: true });
+        window.addEventListener("keydown", state.onUserActivity, { passive: true });
+        window.addEventListener("pointerdown", state.onUserActivity, { passive: true });
+        state.listenersAttached = true;
+      }
+    }
+
+    // Restart inactive tick
+    if (!state.inactiveTickId) {
+      state.inactiveTickId = setInterval(() => {
+        if (state.runtimePaused) return;
+        maybeSuggestInactiveReport();
+      }, 2000);
+    }
   }
 
   function setSub(text) {
@@ -2158,6 +2311,7 @@ function bindEquipStorageListener() {
     else if (raw.includes("spot")) uiState = "spotlight";
     else if (raw.includes("cool")) uiState = "cooldown";
     else if (raw.includes("err") || raw.includes("fail") || raw.includes("crash")) uiState = "error";
+    else if (raw.includes("pause") || raw.includes("stop")) uiState = "paused";
     else if (raw.includes("stand") || raw.includes("idle")) uiState = "standby";
 
     const widget = document.getElementById("follone-widget");
@@ -2172,6 +2326,7 @@ function bindEquipStorageListener() {
       spotlight:  ["SPOT", "スポット"],
       cooldown:   ["COOL", "クール"],
       error:      ["ERR",  "エラー"],
+      paused:     ["PAUS", "テイシ"],
     };
     const pair = topMap[uiState] || ["SYS", "システム"];
     const topText = `${pair[0]} ${pair[1]}`;
@@ -3341,17 +3496,24 @@ function choosePriorityBatch(maxN) {
   }
 
   function scheduleAnalyze(delayMs) {
+    if (state.runtimePaused) return;
     if (state.analyzeScheduled) return;
     state.analyzeScheduled = true;
     const d = typeof delayMs === "number" ? delayMs : 120;
-    setTimeout(analyzePump, Math.max(0, d));
+    try { if (state.analyzeTimerId) clearTimeout(state.analyzeTimerId); } catch (_) {}
+    state.analyzeTimerId = setTimeout(() => {
+      state.analyzeTimerId = 0;
+      analyzePump();
+    }, Math.max(0, d));
   }
 
   async function analyzePump() {
     state.analyzeScheduled = false;
+    if (state.runtimePaused) return;
     ensureRuntimeMaps();
     if (!settings.enabled) return;
     if (state.inFlight) return;
+    const epoch = state.pauseEpoch || 0;
 
     // Keep backend status fresh
     await ensureBackend(false);
@@ -3394,6 +3556,10 @@ function choosePriorityBatch(maxN) {
     try {
       log("info", "[CLASSIFY]", "batch", batch.map(x => x.id), { maxN, backlog });
       const results = await classifyBatch(batch);
+      if (state.runtimePaused || (state.pauseEpoch || 0) !== epoch) {
+        log("debug","[CLASSIFY]","discarded due to pause", { paused: state.runtimePaused });
+        return;
+      }
       log("info", "[CLASSIFY]", "results", results.map(x => ({ id: x.id, risk: x.riskScore, cat: x.riskCategory, topic: x.topicCategory })));
 
       if (results.length) /* time-based loader */
@@ -3501,6 +3667,7 @@ function choosePriorityBatch(maxN) {
   }
 
   function scheduleHighlightFlush(delayMs) {
+    if (state.runtimePaused) return;
     const d = Math.max(0, typeof delayMs === "number" ? delayMs : 0);
     if (state.highlightFlushTimer) clearTimeout(state.highlightFlushTimer);
     state.highlightFlushTimer = setTimeout(() => {
@@ -3537,6 +3704,7 @@ function choosePriorityBatch(maxN) {
 
 
   function flushHighlightCandidates() {
+    if (state.runtimePaused) return;
     // Wait until user stops scrolling for a short window
     if (Date.now() - state.lastScrollTs < 260) {
       scheduleHighlightFlush(260);
@@ -3729,8 +3897,11 @@ function maybeApplyResultToElement(elem, res, ctx) {
   // Observers
   // -----------------------------
   function startObservers() {
+    if (state.observers) { connectObservers(); return; }
+
     // Prefetch observer: starts analysis before user fully sees the post.
     const prefetchIO = new IntersectionObserver((entries) => {
+      if (state.runtimePaused) return;
       ensureRuntimeMaps();
       for (const e of entries) {
         if (!e.isIntersecting) continue;
@@ -3746,6 +3917,7 @@ function maybeApplyResultToElement(elem, res, ctx) {
 
     // Warm observer: bumps priority shortly before the post becomes visible.
     const warmIO = new IntersectionObserver((entries) => {
+      if (state.runtimePaused) return;
       ensureRuntimeMaps();
       for (const e of entries) {
         if (!e.isIntersecting) continue;
@@ -3760,6 +3932,7 @@ function maybeApplyResultToElement(elem, res, ctx) {
 
     // Highlight observer: triggers when post is almost fully visible.
     const highlightIO = new IntersectionObserver((entries) => {
+      if (state.runtimePaused) return;
       ensureRuntimeMaps();
       for (const e of entries) {
         const article = e.target;
@@ -3805,9 +3978,9 @@ function maybeApplyResultToElement(elem, res, ctx) {
       }
     }
 
-    const mo = new MutationObserver(() => attachAll());
-    mo.observe(document.documentElement, { childList: true, subtree: true });
-    attachAll();
+    const mo = new MutationObserver(() => { if (state.runtimePaused) return; attachAll(); });
+    state.observers = { prefetchIO, warmIO, highlightIO, mo, attachAll };
+    if (!state.runtimePaused) connectObservers();
 
     // Scroll/user activity tracking
     const onUserActivity = () => {
@@ -3819,14 +3992,9 @@ function maybeApplyResultToElement(elem, res, ctx) {
         state.firstInteractionTs = now;
       }
       scheduleHighlightFlush(280);
-    };
-    window.addEventListener("scroll", onUserActivity, { passive: true });
-    window.addEventListener("mousemove", onUserActivity, { passive: true });
-    window.addEventListener("keydown", onUserActivity, { passive: true });
-    window.addEventListener("pointerdown", onUserActivity, { passive: true });
+    };    state.onUserActivity = onUserActivity;
 
-    // Inactive suggestion tick
-    setInterval(maybeSuggestInactiveReport, 2000);
+    // Inactive suggestion tick is started/stopped by connectObservers()/disconnectObservers()
 
     // Kick initial discovery/analyze
     scheduleDiscovery(0);
@@ -3834,12 +4002,19 @@ function maybeApplyResultToElement(elem, res, ctx) {
   }
 
   function scheduleDiscovery(delayMs) {
+    if (state.runtimePaused) return;
     if (state.discoverScheduled) return;
     state.discoverScheduled = true;
-    setTimeout(discoveryPump, Math.max(0, typeof delayMs === "number" ? delayMs : 60));
+    const d = Math.max(0, typeof delayMs === "number" ? delayMs : 60);
+    try { if (state.discoveryTimerId) clearTimeout(state.discoveryTimerId); } catch (_) {}
+    state.discoveryTimerId = setTimeout(() => {
+      state.discoveryTimerId = 0;
+      discoveryPump();
+    }, d);
   }
 
   function discoveryPump() {
+    if (state.runtimePaused) { state.discoverScheduled = false; return; }
     ensureRuntimeMaps();
     const backlogGuard = state.analyzeHigh.length + state.analyzeLow.length;
     if (backlogGuard > 140) {
@@ -3879,11 +4054,17 @@ function maybeApplyResultToElement(elem, res, ctx) {
   (async () => {
     ensureRuntimeMaps();
     await loadSettings();
+    await loadUiPrefs();
     bindEquipStorageListener();
     await loadBiasAgg();
     await loadResultCache();
     log("info","[SETTINGS]","loaded", { enabled: settings.enabled, aiMode: settings.aiMode, debug: settings.debug, logLevel: settings.logLevel, batchSize: settings.batchSize, idleMs: settings.idleMs });
     mountUI();
+    // Apply minimized state early (may pause runtime)
+    try { updateMinimizedUI(); } catch (_) {}
+    if (state.uiMinimized) {
+      pauseRuntime();
+    }
     await loadProgress();
     // M3 weekly quest: count active days (SW dedupes per-day)
     recordEvent("day_active");
