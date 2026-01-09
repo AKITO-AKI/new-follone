@@ -524,6 +524,9 @@
       level: 1,
       quest: null,
       biasAgg: null,
+      userState: null,
+      dailyLog: null,
+      weeklyLog: null,
       characterId: 'follone',
       equippedHead: '',
             equippedFx: '',
@@ -553,6 +556,9 @@ backend: { state: 'unavailable', session: '--', latency: '--' },
       'follone_quest',
       // CanSee: primary shared keys
       CANSEE_SELECTED_CHAR_KEY,
+      'cansee_user_state_v1',
+      'cansee_dailyLog_v1',
+      'cansee_weeklyLog_v1',
       // characterId はOverlay側とキー名がズレても復旧できるように複数読む
       'follone_characterId',
       'characterId',
@@ -854,7 +860,29 @@ backend: { state: 'unavailable', session: '--', latency: '--' },
       else if (focus > 0.58) { xpRate = 0.70; xpReason = 'Focusやや高め'; }
       else { xpRate = 1.00; xpReason = '通常'; }
     }
-    if (dom.kvTlType) dom.kvTlType.textContent = tlType;
+    
+// Phase8: prefer unified userState (from content script) for dashboard.
+if (app.data.userState && app.data.userState.state) {
+  const s = String(app.data.userState.state);
+  const labelMap = {
+    NORMAL: '通常',
+    FOCUSED: '集中',
+    EXPLORING: '探索',
+    BIASED: '偏重',
+    TIRED: '疲労'
+  };
+  const reasonMap = {
+    NORMAL: 'バランスは良さそう',
+    FOCUSED: '同じ話題が続いてる',
+    EXPLORING: 'いろんな話題を見てる',
+    BIASED: '一部の話題に寄り気味',
+    TIRED: '情報量が多め'
+  };
+  const label = labelMap[s] || s;
+  const reason = reasonMap[s] || '';
+  tlType = reason ? `${label} — ${reason}` : label;
+}
+if (dom.kvTlType) dom.kvTlType.textContent = tlType;
     if (dom.kvXpRate) dom.kvXpRate.textContent = `${Math.round(xpRate*100)}%${xpReason ? ` (${xpReason})` : ''}`;
 
     // Phase3: level-up reaction (safe: UI-only)
@@ -2094,7 +2122,21 @@ function bindStorageListener() {
         app.data.biasAgg = changes[BIAS_STORAGE_KEY].newValue;
         needBias = true;
       }
-      if (changes.follone_equippedHead) {
+      
+      if (changes.cansee_user_state_v1) {
+        app.data.userState = changes.cansee_user_state_v1.newValue || null;
+        needProgress = true;
+      }
+      if (changes.cansee_dailyLog_v1) {
+        app.data.dailyLog = changes.cansee_dailyLog_v1.newValue || null;
+        needQuest = true;
+        needProgress = true;
+      }
+      if (changes.cansee_weeklyLog_v1) {
+        app.data.weeklyLog = changes.cansee_weeklyLog_v1.newValue || null;
+        needQuest = true;
+      }
+if (changes.follone_equippedHead) {
         app.data.equippedHead = changes.follone_equippedHead.newValue || '';
       }
       if (changes.follone_equippedFx) {
@@ -2157,6 +2199,9 @@ if (dom.selHead || dom.selFx) {
     app.data.level = Number(obj.follone_level || xpToLevel(app.data.xp));
     app.data.quest = obj.follone_quest || null;
     app.data.biasAgg = obj[BIAS_STORAGE_KEY] || null;
+    app.data.userState = obj.cansee_user_state_v1 || null;
+    app.data.dailyLog = obj.cansee_dailyLog_v1 || null;
+    app.data.weeklyLog = obj.cansee_weeklyLog_v1 || null;
     app.data.characterId = pickCharacterId(obj);
     app.data.equippedHead = obj.follone_equippedHead || '';
     app.data.equippedFx = obj.follone_equippedFx || '';

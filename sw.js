@@ -269,55 +269,10 @@ async function getSimulateNoLM() {
 }
 
 const PREFIX = "[follone:sw]";
-
-// Phase1: log normalization + debug gating in service worker
-const LEVELS = { debug: 10, info: 20, warn: 30, error: 40 };
-let __logCfg = { debug: true, logLevel: "info" };
-const __swLogState = { lastSig: "", lastTs: 0, suppressed: 0 };
-
-async function refreshLogCfg() {
-  try {
-    const r = await chrome.storage.local.get(["follone_debug", "follone_logLevel"]);
-    __logCfg.debug = (r.follone_debug !== undefined) ? Boolean(r.follone_debug) : true;
-    __logCfg.logLevel = (r.follone_logLevel || "info");
-  } catch (_e) {
-    // keep defaults
-  }
-}
-refreshLogCfg();
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area !== "local") return;
-  if (changes.follone_debug || changes.follone_logLevel) refreshLogCfg();
-});
-
-function shouldLog(level) {
-  if (!__logCfg.debug) return false;
-  const cur = LEVELS[__logCfg.logLevel] ?? 20;
-  const want = LEVELS[level] ?? 20;
-  return want >= cur;
-}
-
 function log(level, ...args) {
-  if (!shouldLog(level)) return;
-
-  const sig = `${level}|${args.length ? String(args[0]).slice(0, 120) : ""}`;
-  const ts = Date.now();
-  if (sig === __swLogState.lastSig && (ts - __swLogState.lastTs) < 600) {
-    __swLogState.suppressed++;
-    return;
-  }
-  if (__swLogState.suppressed > 0) {
-    const s = __swLogState.suppressed;
-    __swLogState.suppressed = 0;
-    (console.warn || console.log).call(console, PREFIX, `suppressed ${s} repeated logs`);
-  }
-  __swLogState.lastSig = sig;
-  __swLogState.lastTs = ts;
-
   const fn = console[level] || console.log;
   fn.call(console, PREFIX, ...args);
 }
-
 
 chrome.runtime.onInstalled.addListener(async (details) => {
   log("info", "onInstalled", details?.reason);
@@ -498,16 +453,33 @@ async function forwardClassify(requestId, batch, topicList, prefs) {
 
   // Fire-and-forget; offscreen posts result back to SW via runtime message.
   // Legacy async path (not currently used by content.js). Keep aligned with offscreen direct handler.
-  chrome.runtime.sendMessage({
+  const payload = {
     target: "offscreen",
     type: "FOLLONE_OFFSCREEN_CLASSIFY_DIRECT",
     requestId,
     batch,
     topicList,
     prefs: (prefs && typeof prefs === "object") ? prefs : undefined
-  }, () => {
-    // ignore ack; lastError here is not actionable; timeout will cover it.
-  });
+  };
+
+  const sendOnce = (attempt) => {
+    chrome.runtime.sendMessage(payload, () => {
+      const le = chrome.runtime.lastError;
+      if (!le) return; // ack ok (or ignored)
+      const msg = String(le && le.message || le);
+      // If the offscreen listener isn't ready, reset and retry once.
+      if (attempt < 1 && /Receiving end does not exist|Could not establish connection|disconnected/i.test(msg)) {
+        (async () => {
+          await resetOffscreen("classify_send_failed");
+          await ensureOffscreen();
+          sendOnce(attempt + 1);
+        })();
+      }
+    });
+  };
+
+  sendOnce(0);
+  // ignore ack; lastError here is not actionable; timeout will cover it.
 }
 
 

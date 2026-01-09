@@ -5,10 +5,6 @@
 (() => {
   "use strict";
 
-  // Phase1: prevent double-injection / multiple observers after reloads or HMR-like reinjection
-  if (window.__CANSEE_FOLLONE_CONTENT__ ) return;
-  window.__CANSEE_FOLLONE_CONTENT__ = true;
-
   // Compatibility: legacy sprite animator hook (no-op in PetEngine era)
   function ensureSpriteAnim() {}
 
@@ -454,67 +450,20 @@ function bindEquipStorageListener() {
     }
   }
 
-  function safeToStr(v) {
-    try {
-      if (typeof v === "string") return v;
-      if (v instanceof Error) return `${v.name}: ${v.message}`;
-      return JSON.stringify(v);
-    } catch (_e) {
-      return String(v);
-    }
-  }
-
-  // Phase1: log normalization (rate-limit repeated lines to avoid console/ring flooding reminder loops)
-  const __logState = { lastSig: "", lastTs: 0, suppressed: 0 };
-
   function log(level, tag, ...args) {
     if (!shouldLog(level)) return;
-
-    const sig = `${level}|${tag}|${args.length ? safeToStr(args[0]) : ""}`;
-    const ts = Date.now();
-    if (sig === __logState.lastSig && (ts - __logState.lastTs) < 400) {
-      __logState.suppressed++;
-      return;
-    }
-    if (__logState.suppressed > 0) {
-      const s = __logState.suppressed;
-      __logState.suppressed = 0;
-      const t0 = new Date().toISOString().slice(11, 19);
-      const head0 = `${LOG_PREFIX} ${t0} [LOG]`;
-      (console.warn || console.log).call(console, head0, `suppressed ${s} repeated logs`);
-      pushRing(`${head0} suppressed ${s} repeated logs`);
-    }
-    __logState.lastSig = sig;
-    __logState.lastTs = ts;
-
     const t = new Date().toISOString().slice(11, 19);
     const head = `${LOG_PREFIX} ${t} ${tag}`;
     const fn = console[level] || console.log;
     fn.call(console, head, ...args);
     try {
-      const line = [head, ...args.map(safeToStr)].join(" ");
+      const line = [head, ...args.map(a => (typeof a === "string" ? a : JSON.stringify(a)))].join(" ");
       pushRing(line.length > 400 ? line.slice(0, 400) + "…" : line);
     } catch (_e) {
-      // Do not call log() here (would recurse); fall back safely.
-      (console.error || console.log).call(console, `${LOG_PREFIX} ${t} [LOG]`, "unserializable log line");
+      log("error","[BACKEND]","create() failed -> mock", String(_e));
       pushRing(head + " (unserializable)");
     }
   }
-
-  // Phase1: capture uncaught errors once they hit the content script to avoid silent failures
-  window.addEventListener("error", (e) => {
-    try {
-      log("error", "[UNCAUGHT]", e?.message || "error", `${e?.filename || ""}:${e?.lineno || ""}:${e?.colno || ""}`);
-    } catch (_e) {}
-  });
-
-  window.addEventListener("unhandledrejection", (e) => {
-    try {
-      const r = e?.reason;
-      log("error", "[UNHANDLED]", r instanceof Error ? (r.stack || r.message) : safeToStr(r));
-    } catch (_e) {}
-  });
-
 
 
 
@@ -3516,9 +3465,12 @@ function choosePriorityBatch(maxN) {
     };
 
     const sorted = candidates.slice().sort((a, b) => {
+      // Phase8 perf: prioritize top-most posts first (users read from the top).
+      // y: smaller means closer to the top of the timeline.
       const sa = score(a), sb = score(b);
-      if (sa.near !== sb.near) return sa.near - sb.near;
       if (sa.y !== sb.y) return sa.y - sb.y;
+      // If y ties (rare), prefer those nearer the viewport (perceived latency), then sequence.
+      if (sa.near !== sb.near) return sa.near - sb.near;
       return sa.seq - sb.seq;
     });
 
@@ -3587,19 +3539,15 @@ function choosePriorityBatch(maxN) {
     const backlog = state.analyzeLow.length;
     if (!backlog) return;
 
-    // Dynamic batch sizing (M6-B):
-    // - Keep it stable on school PCs: 3..5 is the sweet spot.
-    // - If latency is low, increase batch to improve throughput.
-    // - If latency spikes, fall back to smaller batches to keep UI responsive.
-    const last = Number(state.lastLatencyMs || 0);
-    const base = Math.max(3, Math.min(5, Number(settings.batchSize || 3)));
-    let maxN = base;
-    if (last && last > 9000) maxN = 1;
-    else if (last && last > 6500) maxN = 2;
-    else if (last && last > 4200) maxN = Math.min(base, 3);
-    else if (last && last < 2600) maxN = Math.min(5, Math.max(base, backlog >= 5 ? 5 : 4));
-    // When backend is not fully ready, avoid piling up.
+    // Phase8 perf: prioritize throughput while keeping a hard cap.
+    // Strategy:
+    // - Always pick from the top of the timeline first (choosePriorityBatch does that).
+    // - Send up to 6 posts per request to amortize backend latency.
+    // - If backend isn't ready yet, keep it smaller to avoid piling up.
+    const backlogNow = state.analyzeLow.length;
+    let maxN = Math.min(6, Math.max(1, backlogNow));
     if (state.sessionStatus !== "ready") maxN = Math.min(maxN, 2);
+
     const { batch } = choosePriorityBatch(maxN);
     if (!batch.length) return;
 
@@ -3650,7 +3598,7 @@ function choosePriorityBatch(maxN) {
     } finally {
       state.inFlight = false;
       // Continue processing backlog
-      if (state.analyzeHigh.length + state.analyzeLow.length) scheduleAnalyze(40);
+      if (state.analyzeHigh.length + state.analyzeLow.length) scheduleAnalyze(0);
     }
   }
 
