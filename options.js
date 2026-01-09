@@ -297,6 +297,13 @@
     btnPrompt: $('#btnPrompt'),
     btnWarmup: $('#btnWarmup'),
 
+    // settings mirror (Phase8 UI)
+    aiState2: $('#aiState2'),
+    aiSession2: $('#aiSession2'),
+    aiLatency2: $('#aiLatency2'),
+    btnPrompt2: $('#btnPrompt2'),
+    btnWarmup2: $('#btnWarmup2'),
+
     // next action
     nextText: $('#nextText'),
 
@@ -524,9 +531,6 @@
       level: 1,
       quest: null,
       biasAgg: null,
-      userState: null,
-      dailyLog: null,
-      weeklyLog: null,
       characterId: 'follone',
       equippedHead: '',
             equippedFx: '',
@@ -556,9 +560,6 @@ backend: { state: 'unavailable', session: '--', latency: '--' },
       'follone_quest',
       // CanSee: primary shared keys
       CANSEE_SELECTED_CHAR_KEY,
-      'cansee_user_state_v1',
-      'cansee_dailyLog_v1',
-      'cansee_weeklyLog_v1',
       // characterId はOverlay側とキー名がズレても復旧できるように複数読む
       'follone_characterId',
       'characterId',
@@ -860,29 +861,7 @@ backend: { state: 'unavailable', session: '--', latency: '--' },
       else if (focus > 0.58) { xpRate = 0.70; xpReason = 'Focusやや高め'; }
       else { xpRate = 1.00; xpReason = '通常'; }
     }
-    
-// Phase8: prefer unified userState (from content script) for dashboard.
-if (app.data.userState && app.data.userState.state) {
-  const s = String(app.data.userState.state);
-  const labelMap = {
-    NORMAL: '通常',
-    FOCUSED: '集中',
-    EXPLORING: '探索',
-    BIASED: '偏重',
-    TIRED: '疲労'
-  };
-  const reasonMap = {
-    NORMAL: 'バランスは良さそう',
-    FOCUSED: '同じ話題が続いてる',
-    EXPLORING: 'いろんな話題を見てる',
-    BIASED: '一部の話題に寄り気味',
-    TIRED: '情報量が多め'
-  };
-  const label = labelMap[s] || s;
-  const reason = reasonMap[s] || '';
-  tlType = reason ? `${label} — ${reason}` : label;
-}
-if (dom.kvTlType) dom.kvTlType.textContent = tlType;
+    if (dom.kvTlType) dom.kvTlType.textContent = tlType;
     if (dom.kvXpRate) dom.kvXpRate.textContent = `${Math.round(xpRate*100)}%${xpReason ? ` (${xpReason})` : ''}`;
 
     // Phase3: level-up reaction (safe: UI-only)
@@ -1089,6 +1068,22 @@ if (dom.kvTlType) dom.kvTlType.textContent = tlType;
     setTxt('devLatency', b.latency ?? '--');
     setTxt('devLastErr', b.lastError ?? '--');
 
+    // Home / Settings mirrors (keep user-facing panel in sync)
+    setTxt('aiState', b.state ?? 'unavailable');
+    setTxt('aiSession', b.session ?? '--');
+    setTxt('aiLatency', (b.latency===undefined||b.latency===null) ? '--' : String(b.latency));
+    setTxt('aiState2', b.state ?? 'unavailable');
+    setTxt('aiSession2', b.session ?? '--');
+    setTxt('aiLatency2', (b.latency===undefined||b.latency===null) ? '--' : String(b.latency));
+
+    // HOME/SETTINGS AI card (mirror)
+    if (dom.aiState) dom.aiState.textContent = b.state ?? 'unavailable';
+    if (dom.aiSession) dom.aiSession.textContent = b.session ?? '--';
+    if (dom.aiLatency) dom.aiLatency.textContent = (b.latency ?? '--') + (typeof b.latency === 'number' ? 'ms' : '');
+    if (dom.aiState2) dom.aiState2.textContent = b.state ?? 'unavailable';
+    if (dom.aiSession2) dom.aiSession2.textContent = b.session ?? '--';
+    if (dom.aiLatency2) dom.aiLatency2.textContent = (b.latency ?? '--') + (typeof b.latency === 'number' ? 'ms' : '');
+
     // reflect feature flags in both header and dev
     const f = app.data.master || {};
     const setChk = (id, v) => { const el = document.getElementById(id); if (el) el.checked = !!v; };
@@ -1162,6 +1157,7 @@ if (dom.kvTlType) dom.kvTlType.textContent = tlType;
 function bootPet() {
     const cvMain = document.getElementById('petCanvas');
     const cvSub  = document.getElementById('petCanvasSub');
+    const cvRpg  = document.getElementById('petCanvasRpg');
 
     const setNext = (t) => {
       const el = document.getElementById('nextText');
@@ -1207,11 +1203,13 @@ function bootPet() {
     try {
       P.engineMain = new PetEngine({ canvas: cvMain, debug: false, pixelSize: 1 });
       if (cvSub) P.engineSub = new PetEngine({ canvas: cvSub, debug: false, pixelSize: 1 });
+      if (cvRpg) P.engineRpg = new PetEngine({ canvas: cvRpg, debug: false, pixelSize: 1 });
     } catch (e) {
       console.warn('[HB] PetEngine ctor failed', e);
       setNext('PetEngine: init failed');
       drawFallback(cvMain, 'NO PET');
       drawFallback(cvSub, 'NO PET');
+      drawFallback(cvRpg, 'NO PET');
       return;
     }
 
@@ -1280,6 +1278,16 @@ function bootPet() {
         });
         if (P.engineSub) {
           P.engineSub.renderPet({
+            char: P.char,
+            eyesVariant: eyes,
+            mouthVariant: mouth,
+            extraVariant: 'default',
+            accessories: P.accessories || undefined,
+            equip: { head: headId, fx: fxId }
+          });
+        }
+        if (P.engineRpg) {
+          P.engineRpg.renderPet({
             char: P.char,
             eyesVariant: eyes,
             mouthVariant: mouth,
@@ -1920,6 +1928,26 @@ if (dom.btnBack) dom.btnBack.addEventListener('click', () => setView('home'));
       updateGlance(); updateDiffText();
     });
 
+    // AI CORE buttons (HOME + SETTINGS mirror)
+    const runPrepare = async () => {
+      const resp = await sendSW('FOLLONE_AI_SETUP_START', {});
+      if (resp && resp.ok) speak('準備を開始した。', (app.data.characterId || 'PET').toUpperCase());
+      else speak('準備に失敗した。', (app.data.characterId || 'PET').toUpperCase());
+      await refreshBackend();
+      renderDev();
+    };
+    const runWarmup = async () => {
+      const resp = await sendSW('FOLLONE_BACKEND_WARMUP', {});
+      if (resp && resp.ok) speak('ウォームアップを開始した。', (app.data.characterId || 'PET').toUpperCase());
+      else speak('ウォームアップに失敗した。', (app.data.characterId || 'PET').toUpperCase());
+      await refreshBackend();
+      renderDev();
+    };
+    if (dom.btnPrompt) dom.btnPrompt.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); runPrepare(); });
+    if (dom.btnWarmup) dom.btnWarmup.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); runWarmup(); });
+    if (dom.btnPrompt2) dom.btnPrompt2.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); runPrepare(); });
+    if (dom.btnWarmup2) dom.btnWarmup2.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); runWarmup(); });
+
     // presets (ui-only safe)
     if (dom.btnPresetBeginner) dom.btnPresetBeginner.addEventListener('click', (e) => {
       e.preventDefault(); e.stopPropagation();
@@ -2122,21 +2150,7 @@ function bindStorageListener() {
         app.data.biasAgg = changes[BIAS_STORAGE_KEY].newValue;
         needBias = true;
       }
-      
-      if (changes.cansee_user_state_v1) {
-        app.data.userState = changes.cansee_user_state_v1.newValue || null;
-        needProgress = true;
-      }
-      if (changes.cansee_dailyLog_v1) {
-        app.data.dailyLog = changes.cansee_dailyLog_v1.newValue || null;
-        needQuest = true;
-        needProgress = true;
-      }
-      if (changes.cansee_weeklyLog_v1) {
-        app.data.weeklyLog = changes.cansee_weeklyLog_v1.newValue || null;
-        needQuest = true;
-      }
-if (changes.follone_equippedHead) {
+      if (changes.follone_equippedHead) {
         app.data.equippedHead = changes.follone_equippedHead.newValue || '';
       }
       if (changes.follone_equippedFx) {
@@ -2199,9 +2213,6 @@ if (dom.selHead || dom.selFx) {
     app.data.level = Number(obj.follone_level || xpToLevel(app.data.xp));
     app.data.quest = obj.follone_quest || null;
     app.data.biasAgg = obj[BIAS_STORAGE_KEY] || null;
-    app.data.userState = obj.cansee_user_state_v1 || null;
-    app.data.dailyLog = obj.cansee_dailyLog_v1 || null;
-    app.data.weeklyLog = obj.cansee_weeklyLog_v1 || null;
     app.data.characterId = pickCharacterId(obj);
     app.data.equippedHead = obj.follone_equippedHead || '';
     app.data.equippedFx = obj.follone_equippedFx || '';

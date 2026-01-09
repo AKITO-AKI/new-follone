@@ -61,7 +61,7 @@ body{
   background: rgba(8,8,14,.55);
   backdrop-filter: blur(10px);
 }
-.hb-title__main{letter-spacing:2px;font-weight:700}
+.hb-title__main{letter-spacing:2px;font-weight:700;font-size:22px}
 .hb-title__sub{font-size:12px;color:var(--muted);margin-top:2px}
 .hb-master{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
 .hb-chip{
@@ -148,7 +148,7 @@ body{
 
 .hb-hero{
   display:grid;
-  grid-template-columns: 380px 1fr;
+  grid-template-columns: 320px 1fr;
   gap: 14px;
   height: 100%;
   align-content:start;
@@ -179,7 +179,12 @@ body{
   image-rendering: pixelated;
 }
 
-.hb-core{display:flex;flex-direction:column;gap:14px}
+.hb-core{
+  display:grid;
+  grid-template-rows: auto 1fr;
+  gap:14px;
+  min-height: 360px;
+}
 .hb-coreGrid{
   display:grid;
   grid-template-columns: 1fr 1fr;
@@ -257,6 +262,11 @@ body{
 }
 .hb-bubble__text{font-size:13px;line-height:1.35}
 
+/* Purple command/assistant area should feel like a "panel" */
+.hb-bubble{
+  min-height: 220px;
+}
+
 .hb-paneTitle{font-weight:900;letter-spacing:1px;font-size:18px;margin:4px 0 6px}
 .hb-paneSub{color:var(--muted);font-size:12px;margin-bottom:12px}
 
@@ -264,6 +274,44 @@ body{
   display:grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 12px;
+}
+.hb-chartCard .hb-card__hd{font-size:13px}
+.hb-chart{width:100%;max-width: 420px;height:auto}
+
+.hb-biasDetail{
+  margin-top: 14px;
+  display:grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+.hb-biasDetail .hb-card{min-height: 180px}
+.hb-chart{width:100%;height:auto;max-width:420px}
+
+.hb-biasDetail{
+  margin-top: 12px;
+  display:grid;
+  grid-template-columns: 2fr 1fr;
+  gap: 12px;
+}
+
+.hb-card--aiMirror{align-self:start}
+
+.hb-rpgGrid{
+  display:grid;
+  grid-template-columns: 320px 1fr;
+  grid-auto-rows: minmax(0, auto);
+  gap: 12px;
+}
+.hb-rpgChar{
+  grid-row: 1 / span 2;
+}
+#petCanvasRpg{
+  width: 100%;
+  height: 260px;
+  border-radius: 12px;
+  border:1px solid var(--line2);
+  background: rgba(0,0,0,.45);
+  image-rendering: pixelated;
 }
 .hb-chartCard{display:flex;flex-direction:column;align-items:center}
 .hb-chart{image-rendering:pixelated; border-radius: 14px; border:1px solid var(--line2); background: rgba(0,0,0,.25)}

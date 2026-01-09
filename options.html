@@ -164,6 +164,19 @@
 <button class="hb-seg__btn" data-period="total" data-tip="全期間">TOTAL</button>
 </div>
 </div>
+
+<!-- PURPLE: Bias deep evaluation / explanation -->
+<div class="hb-biasDetail">
+  <div class="hb-card hb-card--wide">
+    <div class="hb-card__hd">AI EVALUATION</div>
+    <div class="hb-mini" id="biasDetailText">--</div>
+    <div class="hb-mini hb-mini--muted">※ここはPhase8以降で、偏りの理由・改善ヒントを「短文」で出す領域。</div>
+  </div>
+  <div class="hb-card">
+    <div class="hb-card__hd">TOPICS (sample)</div>
+    <ul class="hb-list" id="biasDetailTopics"></ul>
+  </div>
+</div>
 </div>
 <!-- MAIN: QUEST -->
 <div class="hb-view" data-view="quest">
@@ -257,6 +270,22 @@
 </div>
 <div class="hb-mini">※学校PC運用のための初期化（チュートリアル未完へ戻す）</div>
 </div>
+
+<!-- Blue: AI controls are better here (mirror of HOME) -->
+<div class="hb-card hb-card--wide hb-card--aiMirror">
+  <div class="hb-card__hd">AI CORE</div>
+  <div class="hb-kv">
+    <div class="hb-kv__row"><span>state</span><b id="aiState2">unavailable</b></div>
+    <div class="hb-kv__row"><span>session</span><b id="aiSession2">--</b></div>
+    <div class="hb-kv__row"><span>latency</span><b id="aiLatency2">--</b></div>
+  </div>
+  <div class="hb-row">
+    <button class="hb-btn hb-btn--pri" id="btnPrompt2">PREPARE</button>
+    <button class="hb-btn" id="btnWarmup2" data-tip="初回ウォームアップ（最初のClassifyまで）">WARMUP</button>
+  </div>
+  <div class="hb-mini hb-mini--muted">※HOMEと同じ操作。押す場所をここにも増やしただけ。</div>
+</div>
+
 </div>
 </div><div class="hb-view" data-view="rpg" style="display:none">
 <div class="hb-viewHead">
@@ -264,6 +293,11 @@
 <div class="hb-mini">成長 / 解放 / 装備</div>
 </div>
 <div class="hb-rpgGrid">
+<section class="hb-card hb-rpgCard hb-rpgChar">
+  <div class="hb-card__hd">CHARACTER</div>
+  <canvas height="160" id="petCanvasRpg" width="160"></canvas>
+  <div class="hb-mini" id="rpgCharText">……成長は、楽しい？</div>
+</section>
 <section class="hb-card hb-rpgCard">
 <div class="hb-card__hd">BATTLE PASS</div>
 <div class="hb-mini" id="bpHint">Lvを上げてアクセを解放しよう。</div>
