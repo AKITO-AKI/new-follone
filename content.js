@@ -5,6 +5,10 @@
 (() => {
   "use strict";
 
+  // Phase1: prevent double-injection / multiple observers after reloads or HMR-like reinjection
+  if (window.__CANSEE_FOLLONE_CONTENT__ ) return;
+  window.__CANSEE_FOLLONE_CONTENT__ = true;
+
   // Compatibility: legacy sprite animator hook (no-op in PetEngine era)
   function ensureSpriteAnim() {}
 
@@ -450,20 +454,67 @@ function bindEquipStorageListener() {
     }
   }
 
+  function safeToStr(v) {
+    try {
+      if (typeof v === "string") return v;
+      if (v instanceof Error) return `${v.name}: ${v.message}`;
+      return JSON.stringify(v);
+    } catch (_e) {
+      return String(v);
+    }
+  }
+
+  // Phase1: log normalization (rate-limit repeated lines to avoid console/ring flooding reminder loops)
+  const __logState = { lastSig: "", lastTs: 0, suppressed: 0 };
+
   function log(level, tag, ...args) {
     if (!shouldLog(level)) return;
+
+    const sig = `${level}|${tag}|${args.length ? safeToStr(args[0]) : ""}`;
+    const ts = Date.now();
+    if (sig === __logState.lastSig && (ts - __logState.lastTs) < 400) {
+      __logState.suppressed++;
+      return;
+    }
+    if (__logState.suppressed > 0) {
+      const s = __logState.suppressed;
+      __logState.suppressed = 0;
+      const t0 = new Date().toISOString().slice(11, 19);
+      const head0 = `${LOG_PREFIX} ${t0} [LOG]`;
+      (console.warn || console.log).call(console, head0, `suppressed ${s} repeated logs`);
+      pushRing(`${head0} suppressed ${s} repeated logs`);
+    }
+    __logState.lastSig = sig;
+    __logState.lastTs = ts;
+
     const t = new Date().toISOString().slice(11, 19);
     const head = `${LOG_PREFIX} ${t} ${tag}`;
     const fn = console[level] || console.log;
     fn.call(console, head, ...args);
     try {
-      const line = [head, ...args.map(a => (typeof a === "string" ? a : JSON.stringify(a)))].join(" ");
+      const line = [head, ...args.map(safeToStr)].join(" ");
       pushRing(line.length > 400 ? line.slice(0, 400) + "…" : line);
     } catch (_e) {
-      log("error","[BACKEND]","create() failed -> mock", String(_e));
+      // Do not call log() here (would recurse); fall back safely.
+      (console.error || console.log).call(console, `${LOG_PREFIX} ${t} [LOG]`, "unserializable log line");
       pushRing(head + " (unserializable)");
     }
   }
+
+  // Phase1: capture uncaught errors once they hit the content script to avoid silent failures
+  window.addEventListener("error", (e) => {
+    try {
+      log("error", "[UNCAUGHT]", e?.message || "error", `${e?.filename || ""}:${e?.lineno || ""}:${e?.colno || ""}`);
+    } catch (_e) {}
+  });
+
+  window.addEventListener("unhandledrejection", (e) => {
+    try {
+      const r = e?.reason;
+      log("error", "[UNHANDLED]", r instanceof Error ? (r.stack || r.message) : safeToStr(r));
+    } catch (_e) {}
+  });
+
 
 
 
